@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from futurework.runtime.orchestrator import InteractionEvent, Orchestrator, TurnResult
+from futurework.runtime.orchestrator import EventType, InteractionEvent, Orchestrator, TurnResult
 from futurework.sensory.facial import HeadPoseAnalyzer
 from futurework.sensory.gaze import GazeTracker, UIElement
 from futurework.sensory.gesture import GestureInterpreter, PointingResolver
@@ -142,12 +142,27 @@ class FutureWorkSession:
         """注册界面元素，让视线能被吸附到具体控件。"""
         self.gaze.register_elements(elements)
 
-    def feedback(self, callback: Callable[[SystemFeedback, TurnResult], None]) -> None:
-        """订阅反馈流——接 TTS / 屏幕提示 / 触觉反馈都走这里。"""
-        self.orchestrator.bus.subscribe(
-            "turn.response",
-            lambda event: callback(SystemFeedback(**event.payload.get("feedback", {"text": event.payload.get("text", "")})), self._turns[-1] if self._turns else None),
-        )
+    def on_feedback(self, callback: Callable[[SystemFeedback, TurnResult], None]) -> Callable[[], None]:
+        """
+        订阅反馈流——接 TTS / 屏幕提示 / 触觉反馈都走这里。
+
+        回调收到完整的 :class:`SystemFeedback`（含语音文本、提示音、告警级别）
+        以及本轮的 :class:`TurnResult`。返回取消订阅的函数。
+
+        ::
+
+            session.on_feedback(lambda fb, turn: speak(fb.speech_audio_text or fb.text))
+        """
+        def _dispatch(event) -> None:
+            payload = event.payload or {}
+            raw = payload.get("feedback")
+            feedback = SystemFeedback(**raw) if raw else SystemFeedback(text=payload.get("text", ""))
+            callback(feedback, self._turns[-1] if self._turns else None)
+
+        return self.orchestrator.bus.subscribe(EventType.RESPONSE.value, _dispatch)
+
+    # 旧名字保留，避免破坏既有调用方
+    feedback = on_feedback
 
     # ==================================================================
     def undo(self) -> Dict[str, Any]:

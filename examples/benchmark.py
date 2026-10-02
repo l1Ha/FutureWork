@@ -84,6 +84,10 @@ CORPUS = [
     ("minimize all", "minimize_all"),
     ("undo", "undo"),
     ("yes", "confirm"),
+    # 口语化：动作放在对象之后
+    ("把 TODO.md 看一下", "read_file"),
+    ("把 config.json 看看", "read_file"),
+    ("看一下 README.md", "unknown"),   # 未支持的说法，应落到追问而非乱执行
 ]
 
 

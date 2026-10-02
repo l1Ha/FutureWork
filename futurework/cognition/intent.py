@@ -245,7 +245,11 @@ def get_default_rules() -> List[IntentRule]:
             tool_hint="filesystem",
             priority=155,
             patterns=[
-                r"^(?:读取|读出|读一下|读|查看文件|打开文件)\s*(?:文件)?\s*(?P<path>\S{1,200})",
+                r"^(?:读取|读出|读一下|读)\s+(?:文件\s*)?(?P<path>\S{1,200})$",
+                r"^(?:读取|读出|读)(?P<path>[A-Za-z0-9._/~\\-]\S{0,199})$",
+                r"^(?:打开文件|查看文件)\s*(?P<path>\S{1,200})$",
+                # "把 TODO.md 看一下" —— 口语里把动作放在对象之后
+                r"^(?:把|将)?\s*(?P<path>\S+)\s*(?:看一下|看一眼|看看|瞧一下)$",
                 r"^(?:read|view|cat)\s+(?:the\s+)?(?:file\s+)?(?P<path>\S*[./]\S{1,200}|\S+\.[a-z0-9]{1,10})$",
             ],
         ),
@@ -396,6 +400,28 @@ def get_default_rules() -> List[IntentRule]:
     ]
 
 
+# 裸动词：用户只说了动作、还没说对象。
+# "读取"单独一句是完全自然的话——它不是"听不懂"，而是一个待补全的意图。
+# 若按未知指令处理，系统会回答"我没太明白"，把人推回从头再说一遍；
+# 正确做法是认出这个动作，然后只追问缺的那一个槽位。
+_BARE_VERB_ACTIONS = {
+    "读取": "read_file", "读一下": "read_file", "读出": "read_file", "读": "read_file",
+    "打开文件": "read_file", "查看文件": "read_file",
+    "打开": "launch_app", "启动": "launch_app", "运行应用": "launch_app",
+    "删除": "delete_file", "删掉": "delete_file", "移除": "delete_file",
+    "重命名": "move_file", "移动": "move_file",
+    "复制": "copy_file", "拷贝": "copy_file",
+    "创建目录": "create_directory", "新建目录": "create_directory",
+    "写入": "write_file", "保存": "write_file",
+    "查找": "search_in_file", "搜索": "search_web",
+    "关闭": "close_window", "最小化": "minimize_all", "最大化": "maximize_window",
+    "切换": "focus_window", "跑测试": "run_tests",
+    "read": "read_file", "open": "launch_app", "delete": "delete_file",
+    "copy": "copy_file", "move": "move_file", "run": "run_command",
+    "search": "search_web", "close": "close_window", "undo": "undo",
+}
+
+
 class IntentParser:
     """
     意图解析器：规则 + 语义通道 + 多模态修饰。
@@ -489,6 +515,14 @@ class IntentParser:
             requires_conf = rule.requires_confirmation or score < 0.6
             explanation = f"语义匹配「{rule.action}」({score:.2f})"
         else:
+            # 规则未命中，但可能只是一个"只说了动作"���半成品指令
+            incomplete = self.detect_incomplete(normalized)
+            if incomplete is not None:
+                if fused is not None:
+                    incomplete.source_modalities = fused.modalities_used
+                    incomplete.grounded_target = fused.target
+                incomplete.ambiguity_score = 0.5
+                return incomplete
             return Intent(
                 category=IntentCategory.UNKNOWN,
                 action="unknown",
@@ -527,6 +561,40 @@ class IntentParser:
             requires_confirmation=requires_conf,
             natural_explanation=explanation,
         )
+
+    def detect_incomplete(self, text: str) -> Optional[Intent]:
+        """
+        识别"只说了动作、没说对象"的半成品指令。
+
+        >>> parser.detect_incomplete("读取").action
+        'read_file'
+
+        :returns: 识别成功返回缺少槽位的意图，否则返回 ``None``。
+        """
+        normalized = _normalize(text).strip(" 　。.!！?？")
+        if not normalized:
+            return None
+        # 允许"读取那个""把那个读取一下"这类省略说法
+        candidates = [normalized]
+        stripped = re.sub(r"^(?:把|将)?\s*(?:那个|这个|它)\s*", "", normalized)
+        stripped = re.sub(r"\s*(?:一下|一次)$", "", stripped).strip()
+        if stripped and stripped != normalized:
+            candidates.append(stripped)
+
+        for candidate in candidates:
+            action = _BARE_VERB_ACTIONS.get(candidate) or _BARE_VERB_ACTIONS.get(candidate.lower())
+            if not action:
+                continue
+            rule = next((r for r in self.rules if r.action == action), None)
+            return Intent(
+                category=rule.category if rule else IntentCategory.UNKNOWN,
+                action=action,
+                parameters={},
+                confidence=0.6,
+                requires_confirmation=False,
+                natural_explanation=f"识别到动作「{action}」，等待补充对象",
+            )
+        return None
 
     # ------------------------------------------------------------------
     def _semantic_match(self, text: str) -> Optional[Tuple[IntentCategory, float]]:

@@ -25,7 +25,16 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from futurework.cognition.dialogue import DialogueManager, DialogueState
+from futurework.cognition.compound import (
+    Correction,
+    detect_correction,
+    split_respecting_quotes,
+)
+from futurework.cognition.dialogue import (
+    DialogueManager,
+    DialogueState,
+    _REQUIRED_SLOTS as _REQUIRED_SLOTS_FOR,
+)
 from futurework.cognition.intent import IntentParser
 from futurework.resilience.circuit import BreakerRegistry, CircuitOpenError
 from futurework.resilience.errors import ErrorCategory, classify_result, human_readable
@@ -191,18 +200,189 @@ class Orchestrator:
     # ==================================================================
     def interact(self, event: InteractionEvent) -> TurnResult:
         """
-        处理一次多模态交互。
+        处理一次多模态交互（对话层入口）。
+
+        进入九阶段流水线之前，先处理三件"一句话层面"的事——
+        它们决定了人机交流像不像人与人交流：
+
+        1. **纠正**："不对""应该是 b.txt"，这是人做完动作后最常说的一句；
+        2. **复合拆分**："复制完然后删除"，人从不一次只下一个指令；
+        3. 其余交给 :meth:`_interact_single` 原样执行。
 
         该方法**永不抛异常**：任何内部失败都被转换为带说明的反馈，
         保证对话能继续——这是自然交互的底线要求。
         """
+        text = event.speech.transcript if event.speech else ""
+
+        # ---------- 纠正 ----------
+        correction = detect_correction(text)
+        if correction is not None:
+            return self._handle_correction(event, correction)
+
+        # ---------- 复合指令 ----------
+        segments = split_respecting_quotes(text) if text else []
+        if len(segments) > 1:
+            return self._handle_compound(event, segments)
+
+        return self._interact_single(event)
+
+    # ==================================================================
+    # 纠正
+    # ==================================================================
+    def _handle_correction(self, event: InteractionEvent, correction: "Correction") -> TurnResult:
+        """
+        处理"不对 / 应该是 X"。
+
+        有意区分两种结果：
+
+        * **只否定**（"不对"）→ 撤回刚做的那一步，把选择权交回用户。
+          人说"不对"时期待的是"回到刚才之前"，而不是"你再说一遍"；
+        * **带更正**（"应该是 b.txt"）→ 撤回后直接执行更正后的动作。
+        """
+        turn_id = uuid.uuid4().hex[:8]
+        started = time.perf_counter()
+        self._turn_count += 1
+
+        # 必须在撤销之前取：一旦回退，该条目就被标记为 undone，
+        # 之后再想拿它来推导更正后的动作就找不到了。
+        previous = self.undo.last_undoable()
+        undone = self.undo.undo_last()
+        self.dialogue.pending = None
+        self.dialogue.clarification = None
+        self.dialogue.state = DialogueState.IDLE
+
+        if correction.is_rewrite and correction.replacement:
+            replacement = correction.replacement
+            # 更正内容常常只是一个裸值（"不对，应该是 b.txt"），
+            # 它是对刚才那个动作的修正，而不是一条新指令。
+            if self.parser.parse(replacement).category is IntentCategory.UNKNOWN and previous is not None:
+                slot = _REQUIRED_SLOTS_FOR.get(previous.action, "")
+                if slot and slot in previous.args:
+                    params = dict(previous.args)
+                    params[slot] = replacement
+                    rebuilt = _rebuild_utterance(previous.action, params)
+                    if rebuilt:
+                        replacement = rebuilt
+
+            turn = self._interact_single(
+                InteractionEvent(
+                    speech=SpeechSignal(transcript=replacement),
+                    gestures=event.gestures,
+                    facial=event.facial,
+                    head_pose=event.head_pose,
+                    gaze=event.gaze,
+                    environment_noise_level=event.environment_noise_level,
+                ),
+                quiet=True,
+            )
+            prefix = f"{undone['message']}。" if undone.get("ok") else ""
+            turn.feedback.text = f"{prefix}{turn.feedback.text}"
+            turn.latency_ms = (time.perf_counter() - started) * 1000
+            self.bus.emit(Event(EventType.TURN_END, {"turn_id": turn_id, "corrected": True}))
+            return turn
+
+        if undone.get("ok"):
+            message = f"{undone['message']}。想怎么做？"
+        else:
+            message = f"明白，先不动。{undone.get('message', '')}"
+
+        turn = TurnResult(
+            turn_id=turn_id,
+            status=ExecutionStatus.CANCELLED,
+            feedback=SystemFeedback(text=message, visual_alert_level="info"),
+            latency_ms=(time.perf_counter() - started) * 1000,
+        )
+        self._last_turn = turn
+        self.bus.emit(Event(EventType.TURN_END, {"turn_id": turn_id, "corrected": True}))
+        return turn
+
+    # ==================================================================
+    # 复合指令
+    # ==================================================================
+    def _handle_compound(self, event: InteractionEvent, segments: List[str]) -> TurnResult:
+        """
+        顺序执行一句话里的多个动作。
+
+        **遇错即停**：某一步失败或需要确认时，不再继续后面的动作。
+        人听到"复制完然后删除"时，默认假设前一步成功了才会做后一步；
+        若前一步实际失败还继续执行，就会做出用户没预期的破坏性操作。
+        """
+        turn_id = uuid.uuid4().hex[:8]
+        started = time.perf_counter()
+        self._turn_count += 1
+        self.bus.emit(Event(EventType.TURN_START, {"turn_id": turn_id, "compound": len(segments)}))
+
+        turns: List[TurnResult] = []
+        stopped_at: Optional[int] = None
+        for index, segment in enumerate(segments):
+            turn = self._interact_single(
+                InteractionEvent(
+                    speech=SpeechSignal(transcript=segment),
+                    # 手势/视线/表情只作用于第一个动作：复用到后续动作上会
+                    # 把"刚才指的那个位置"套用到毫不相干的命令上
+                    gestures=event.gestures if index == 0 else [],
+                    facial=event.facial if index == 0 else None,
+                    head_pose=None,
+                    gaze=event.gaze if index == 0 else None,
+                    environment_noise_level=event.environment_noise_level,
+                ),
+                quiet=True,
+            )
+            turns.append(turn)
+            if turn.status in (
+                ExecutionStatus.FAILED,
+                ExecutionStatus.REJECTED_BY_SAFETY,
+                ExecutionStatus.PENDING_CONFIRMATION,
+                ExecutionStatus.CANCELLED,
+            ):
+                stopped_at = index
+                break
+
+        spoken = "；".join(t.feedback.text for t in turns)
+        all_ok = all(t.status is ExecutionStatus.SUCCESS for t in turns)
+
+        if all_ok:
+            level, summary = "success", spoken
+        elif stopped_at is not None:
+            more = f"（第 {stopped_at + 1}/{len(segments)} 步停下）" if stopped_at < len(segments) - 1 else ""
+            level = "warning" if turns[stopped_at].status is ExecutionStatus.PENDING_CONFIRMATION else "error"
+            summary = f"{spoken}{more}"
+        else:
+            level, summary = "warning", spoken
+
+        final_status = (
+            ExecutionStatus.SUCCESS if all_ok
+            else turns[stopped_at].status if stopped_at is not None
+            else ExecutionStatus.FAILED
+        )
+
+        turn = TurnResult(
+            turn_id=turn_id,
+            status=final_status,
+            feedback=SystemFeedback(text=summary, visual_alert_level=level),
+            executed=all_ok,
+            needs_confirmation=final_status is ExecutionStatus.PENDING_CONFIRMATION,
+            latency_ms=(time.perf_counter() - started) * 1000,
+            stage_timings={},
+            errors=[e for t in turns for e in t.errors],
+        )
+        self._last_turn = turn
+        self.bus.emit(Event(EventType.TURN_END, {"turn_id": turn_id, "compound": len(segments)}))
+        return turn
+
+    # ==================================================================
+    # 九阶段流水线
+    # ==================================================================
+    def _interact_single(self, event: InteractionEvent, *, quiet: bool = False) -> TurnResult:
+        """执行单个动作，完整走九阶段流水线。"""
         turn_id = uuid.uuid4().hex[:8]
         started = time.perf_counter()
         timings: Dict[str, float] = {}
         errors: List[str] = []
         self._turn_count += 1
 
-        self.bus.emit(Event(EventType.TURN_START, {"turn_id": turn_id}, EventPriority.NORMAL, "orchestrator"))
+        if not quiet:
+            self.bus.emit(Event(EventType.TURN_START, {"turn_id": turn_id}, EventPriority.NORMAL, "orchestrator"))
 
         def _mark(stage: str, t0: float) -> float:
             timings[stage] = (time.perf_counter() - t0) * 1000
@@ -246,6 +426,16 @@ class Orchestrator:
         was_awaiting_confirmation = self.dialogue.state is DialogueState.AWAITING_CONFIRMATION
         was_awaiting_clarification = self.dialogue.state is DialogueState.AWAITING_CLARIFICATION
         pending_before = self.dialogue.pending
+
+        # ---------- 槽位续答 ----------
+        # 系统问"请补充 path"，用户回一个裸值（"x.txt"）——那是答案，不是新指令。
+        # 人补充信息时不会重复动词，说"x.txt"是自然的；要求用户把整句重说一遍
+        # 会让交互变得非常难用。
+        if was_awaiting_clarification and pending_before is not None and intent.category is IntentCategory.UNKNOWN:
+            merged = self._merge_slot_answer(pending_before, text)
+            if merged is not None:
+                intent = merged
+                self.dialogue.clarification = None
 
         self.dialogue.start_turn()
         if text:
@@ -451,6 +641,32 @@ class Orchestrator:
         except Exception:
             return None
 
+    def _merge_slot_answer(self, pending: Intent, text: str) -> Optional[Intent]:
+        """
+        把用户的裸值回答并入待补全的意图。
+
+        :returns: 合并后的意图；若这段文本不像在回答问题则返回 ``None``。
+        """
+        slot = self.dialogue.clarification.target_slot if self.dialogue.clarification else None
+        if not slot:
+            required = _REQUIRED_SLOTS_FOR.get(pending.action)
+            slot = required
+        if not slot or not text.strip():
+            return None
+
+        answer = text.strip().strip("。.!！,，")
+        if not answer:
+            return None
+        # 回答里又带了一个完整动词 → 那是一条新指令，不该塞进槽位
+        if self.parser.parse(answer).category is not IntentCategory.UNKNOWN:
+            return None
+
+        params = dict(pending.parameters or {})
+        params[slot] = answer
+        return Intent(
+            **{**pending.model_dump(), "parameters": params, "requires_confirmation": False}
+        )
+
     def _handle_control(self, intent: Intent) -> Optional[Tuple[SystemFeedback, ExecutionStatus]]:
         """
         处理无需调用工具的对话控制意图：拒绝、取消、撤销。
@@ -583,7 +799,17 @@ class Orchestrator:
                 "error": result.error if result else None,
             },
         ))
-        self.bus.emit(Event(EventType.RESPONSE, {"text": feedback.text, "status": status.value}))
+        self.bus.emit(Event(
+            EventType.RESPONSE,
+            {
+                "text": feedback.text,
+                "status": status.value,
+                # 完整反馈对象：订阅方（TTS / 屏幕 / 触觉）需要的是
+                # speech_audio_text、sound_cue、visual_alert_level 等全部通道，
+                # 只给 text 会让这些反馈无处可取
+                "feedback": feedback.model_dump(),
+            },
+        ))
         self.bus.emit(Event(EventType.TURN_END, {"turn_id": turn_id, "latency_ms": latency, "errors": errors}))
         return turn
 
@@ -612,6 +838,39 @@ _IDEMPOTENT_ACTIONS = frozenset({
     "git_diff", "git_log", "search_in_file", "get_working_directory", "history",
     "list_mcp_tools", "list_editors",
 })
+
+
+# 用于把"动作 + 已更正槽位"还原成一句可再次解析的话。
+# 之所以走文本而���直接构造 Intent，是因为解析层还负责安全判定与路由，
+# 绕开它会让更正后的动作跳过同一套检查。
+_ACTION_UTTERANCES = {
+    "read_file": "读取 {path}",
+    "write_file": "把 {content} 写入 {path}",
+    "append_file": "把 {content} 追加到 {path}",
+    "delete_file": "删除文件 {path}",
+    "copy_file": "把 {source} 复制到 {destination}",
+    "move_file": "把 {source} 移动到 {destination}",
+    "create_directory": "创建目录 {path}",
+    "search_in_file": "在 {path} 里查找 {keyword}",
+    "launch_app": "打开 {app}",
+    "focus_window": "切换到 {name} 窗口",
+    "open_url": "打开 {url}",
+    "search_web": "搜索 {query}",
+    "run_command": "运行 {command}",
+    "git_commit": "提交代码 {message}",
+}
+
+
+def _rebuild_utterance(action: str, params: Dict[str, Any]) -> Optional[str]:
+    """把更正后的槽位填回动作模板，生成可再次解析的指令文本。"""
+    template = _ACTION_UTTERANCES.get(action)
+    if not template:
+        return None
+    try:
+        rendered = template.format(**{k: ("" if v is None else v) for k, v in params.items()})
+    except (KeyError, IndexError):
+        return None
+    return rendered if "{" not in rendered else None
 
 
 def _abs_path(root: str, rel: str) -> str:
