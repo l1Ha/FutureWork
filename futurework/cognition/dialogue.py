@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
+from futurework.cognition.memory import PersistentMemoryStore
 from futurework.types import (
     ExecutionStatus,
     GroundingTarget,
@@ -62,13 +63,20 @@ class DialogueManager:
     MAX_CLARIFY_ATTEMPTS = 3
     PENDING_TTL_SECONDS = 120.0
 
-    def __init__(self, max_clarify_attempts: int = MAX_CLARIFY_ATTEMPTS) -> None:
+    def __init__(
+        self,
+        max_clarify_attempts: int = MAX_CLARIFY_ATTEMPTS,
+        *,
+        memory_store: Optional[PersistentMemoryStore] = None,
+        memory_path: Optional[str] = None,
+    ) -> None:
         self.state = DialogueState.IDLE
         self.max_clarify_attempts = max_clarify_attempts
         self.pending: Optional[Intent] = None
         self.clarification: Optional[Clarification] = None
         self.history: List[Tuple[float, str, str]] = []
         self.reference_table: Dict[str, GroundingTarget] = {}
+        self.memory = memory_store or PersistentMemoryStore(storage_path=memory_path)
         self._counter = 0
 
     # ------------------------------------------------------------------
@@ -198,11 +206,16 @@ class DialogueManager:
         return intent
 
     def remember_target(self, target: GroundingTarget) -> None:
-        """登记一次成功交互的目标，供后续指代使用。"""
+        """登记一次成功交互的目标，供后续指代使用并持久化到跨会话记忆。"""
         self.reference_table[target.target_id] = target
         if len(self.reference_table) > 32:
             oldest = next(iter(self.reference_table))
             self.reference_table.pop(oldest, None)
+        # 写入跨进程持久化记忆
+        try:
+            self.memory.record_target(target)
+        except Exception:
+            pass
 
     def _lookup_reference(self, phrase: str) -> Optional[GroundingTarget]:
         cleaned = _normalize_deictic(phrase)
@@ -211,12 +224,18 @@ class DialogueManager:
         for key, target in reversed(list(self.reference_table.items())):
             if cleaned and cleaned in target.label.lower():
                 return target
-        # 纯指代词（"这个""它"）且当前只有一个候选目标时直接采用——
-        # 人对着唯一的文件说"打开这个"就是在指它，不该为此多问一轮。
+        # 纯指代词（"这个""它"）且当前会话中恰好有一个候选目标时直接采用
         if not cleaned:
             candidates = list(self.reference_table.values())
             if len(candidates) == 1:
                 return candidates[0]
+        # 内存中未直接命中，求助于跨会话持久化记忆
+        try:
+            persistent_match = self.memory.resolve_reference(phrase)
+            if persistent_match is not None:
+                return persistent_match
+        except Exception:
+            pass
         return None
 
     def _missing_slots(self, intent: Intent) -> str:
@@ -267,17 +286,20 @@ _REQUIRED_SLOTS: Dict[str, str] = {
 
 _DEICTIC_WORDS = {
     "这个", "那个", "这些", "那些", "它", "他", "她",
-    "this", "that", "it", "these", "those",
+    "刚才", "刚刚", "之前", "上一个", "上一次", "上次",
+    "this", "that", "it", "these", "those", "recent", "previous",
 }
 
 
 def _is_deictic(value: str) -> bool:
     v = value.strip().lower()
-    return v in _DEICTIC_WORDS or any(v.startswith(w) for w in ("这个", "那个"))
+    if v in _DEICTIC_WORDS:
+        return True
+    return any(w in v for w in ("这个", "那个", "刚才", "刚刚", "之前", "上一个", "上次", "recent", "previous"))
 
 
 def _normalize_deictic(value: str) -> str:
     v = value.strip().lower()
-    for word in ("这个", "那个"):
+    for word in ("这个", "那个", "刚才", "刚刚", "之前", "上一个", "上次", "文件", "file", "文档"):
         v = v.replace(word, "").replace("窗口", "window")
     return v.strip()

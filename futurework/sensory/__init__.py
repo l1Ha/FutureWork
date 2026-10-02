@@ -9,19 +9,23 @@
 
 from __future__ import annotations
 
-from futurework.sensory.speech import SpeechRecognizer, SimulatedMicrophone
-from futurework.sensory.gesture import (
-    GestureInterpreter,
-    SimulatedHandTracker,
-    PointingResolver,
-)
 from futurework.sensory.facial import (
     FacialExpressionAnalyzer,
     HeadPoseAnalyzer,
     SimulatedCamera,
 )
-from futurework.sensory.gaze import GazeTracker, SimulatedEyeTracker
 from futurework.sensory.fusion import MultimodalFusionEngine, WorkingMemory
+from futurework.sensory.gaze import GazeTracker, SimulatedEyeTracker
+from futurework.sensory.gesture import (
+    GestureInterpreter,
+    PointingResolver,
+    SimulatedHandTracker,
+)
+from futurework.sensory.speech import SimulatedMicrophone, SpeechRecognizer
+from futurework.sensory.temporal_aligner import (
+    StreamingPerceptionLoop,
+    TemporalAlignmentBuffer,
+)
 
 __all__ = [
     "SpeechRecognizer",
@@ -36,4 +40,6 @@ __all__ = [
     "SimulatedEyeTracker",
     "MultimodalFusionEngine",
     "WorkingMemory",
+    "TemporalAlignmentBuffer",
+    "StreamingPerceptionLoop",
 ]

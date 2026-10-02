@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from futurework.tools.base import Capability, ToolAdapter
 from futurework.tools.browser_adapter import BrowserAdapter
 from futurework.tools.filesystem_adapter import FileSystemAdapter
+from futurework.tools.productivity_adapter import ProductivitySuiteAdapter
 from futurework.tools.system_adapter import SystemAdapter
 from futurework.tools.terminal_adapter import EditorAdapter, TerminalAdapter
 from futurework.tools.vcs_adapter import VcsAdapter
@@ -167,6 +168,7 @@ def default_registry(
         EditorAdapter(root),
         BrowserAdapter(),
         VcsAdapter(root),
+        ProductivitySuiteAdapter(root),
     ])
     registry.register_hint("system", "system")
     registry.register_hint("filesystem", "filesystem")
@@ -174,6 +176,7 @@ def default_registry(
     registry.register_hint("editor", "editor")
     registry.register_hint("browser", "browser")
     registry.register_hint("vcs", "vcs")
+    registry.register_hint("productivity", "productivity")
 
     if include_mcp:
         from futurework.tools.mcp_adapter import McpAdapter

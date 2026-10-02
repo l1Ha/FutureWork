@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FutureWork — 面向未来的人机自然交互生产力核心控制台</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --panel-bg: rgba(18, 26, 43, 0.85);
+      --border: rgba(45, 62, 98, 0.6);
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --cyan: #06b6d4;
+      --green: #10b981;
+      --yellow: #f59e0b;
+      --red: #ef4444;
+      --purple: #8b5cf6;
+      --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: radial-gradient(circle at 50% 10%, #151f38, #070a12 70%);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+    header {
+      background: rgba(11, 15, 25, 0.9);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .logo-area { display: flex; align-items: center; gap: 12px; }
+    .logo-badge {
+      background: linear-gradient(135deg, var(--cyan), var(--purple));
+      color: #fff;
+      font-weight: 800;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 13px;
+      letter-spacing: 0.5px;
+    }
+    .logo-title { font-size: 18px; font-weight: 700; letter-spacing: -0.2px; }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--text-muted);
+      background: rgba(255,255,255,0.05);
+      padding: 4px 12px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+    
+    main {
+      flex: 1;
+      padding: 20px;
+      display: grid;
+      grid-template-columns: 320px 1fr 340px;
+      gap: 16px;
+      max-width: 1720px;
+      width: 100%;
+      margin: 0 auto;
+    }
+    @media (max-width: 1200px) {
+      main { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    }
+    .card-title {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--cyan);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      padding-bottom: 8px;
+      font-weight: 600;
+    }
+    
+    /* 左侧：感知 HUD */
+    .sensor-item {
+      background: rgba(0,0,0,0.25);
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .sensor-label { font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between; }
+    .meter-bar {
+      height: 6px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .meter-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--cyan), var(--green));
+      width: 85%;
+      transition: width 0.3s;
+    }
+    #gazeCanvas {
+      width: 100%;
+      height: 140px;
+      background: rgba(0,0,0,0.4);
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+    .modal-tag {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(6, 182, 212, 0.15);
+      color: var(--cyan);
+      border: 1px solid rgba(6, 182, 212, 0.3);
+    }
+
+    /* 中部：交互日志与认知流 */
+    .timeline {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow-y: auto;
+      max-height: calc(100vh - 240px);
+      padding-right: 4px;
+    }
+    .turn-bubble {
+      background: rgba(0,0,0,0.3);
+      border-left: 3px solid var(--cyan);
+      border-radius: 0 8px 8px 0;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      animation: fadeIn 0.25s ease-out;
+    }
+    .turn-bubble.success { border-left-color: var(--green); }
+    .turn-bubble.warning { border-left-color: var(--yellow); }
+    .turn-bubble.error { border-left-color: var(--red); }
+    .turn-header { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); }
+    .turn-query { font-size: 14px; font-weight: 500; color: #fff; }
+    .turn-response { font-size: 13px; color: #cbd5e1; line-height: 1.5; }
+    .turn-meta { display: flex; gap: 8px; font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+
+    /* 右侧：工具态 */
+    .tool-list { display: flex; flex-direction: column; gap: 8px; }
+    .tool-chip {
+      background: rgba(0,0,0,0.25);
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.04);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+    }
+    .tool-name { font-weight: 600; }
+    .tool-count { font-size: 11px; color: var(--text-muted); }
+
+    /* 底部控制台 */
+    footer {
+      background: rgba(11, 15, 25, 0.95);
+      backdrop-filter: blur(12px);
+      border-top: 1px solid var(--border);
+      padding: 16px 24px;
+      position: sticky;
+      bottom: 0;
+      z-index: 100;
+    }
+    .input-bar {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .text-input {
+      flex: 1;
+      background: rgba(0,0,0,0.5);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: #fff;
+      padding: 10px 16px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .text-input:focus { border-color: var(--cyan); }
+    .btn {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 9px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .btn:hover { background: rgba(255,255,255,0.15); border-color: var(--cyan); }
+    .btn-primary { background: linear-gradient(135deg, #0284c7, #0891b2); border: none; color: #fff; font-weight: 600; }
+    .btn-primary:hover { opacity: 0.9; }
+
+    .quick-bar {
+      max-width: 1200px;
+      margin: 8px auto 0;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 12px;
+    }
+    .quick-tag {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      padding: 3px 10px;
+      cursor: pointer;
+      color: var(--text-muted);
+      transition: all 0.15s;
+    }
+    .quick-tag:hover { color: #fff; background: rgba(6, 182, 212, 0.2); border-color: var(--cyan); }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo-area">
+      <div class="logo-badge">FUTUREWORK</div>
+      <div class="logo-title">全平台多模态自然交互生产力核心</div>
+    </div>
+    <div class="status-badge">
+      <div class="status-dot"></div>
+      <span id="runtimeStatus">核心运行时正常 (亚毫秒级低延迟)</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- 左侧：多模态感知 HUD -->
+    <section class="card">
+      <div class="card-title">
+        <span>多模态感知流 (Sensory HUD)</span>
+        <span class="modal-tag">REAL-TIME</span>
+      </div>
+
+      <div class="sensor-item">
+        <div class="sensor-label">
+          <span>屏幕注视与眼动追踪 (Gaze)</span>
+          <span id="gazeCoord" style="font-family:var(--font-mono)">(0.50, 0.50)</span>
+        </div>
+        <canvas id="gazeCanvas"></canvas>
+      </div>
+
+      <div class="sensor-item">
+        <div class="sensor-label">
+          <span>当前手势动作 (Gesture)</span>
+          <span id="gestureLabel" style="color:var(--cyan);font-weight:600">IDLE</span>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted)" id="gesturePos">空间坐标: (0.50, 0.50, 0.50)</div>
+      </div>
+
+      <div class="sensor-item">
+        <div class="sensor-label">
+          <span>面部微表情与认知负荷</span>
+          <span id="emotionLabel" style="color:var(--green)">NEUTRAL</span>
+        </div>
+        <div class="meter-bar">
+          <div class="meter-fill" id="attentionMeter" style="width: 95%;"></div>
+        </div>
+        <div class="sensor-label" style="font-size:11px">
+          <span>注意力评分 (Attention)</span>
+          <span id="attentionVal">0.95</span>
+        </div>
+      </div>
+
+      <div class="sensor-item">
+        <div class="sensor-label">
+          <span>多模态加权置信度</span>
+          <span id="fusionConf" style="color:var(--cyan);font-weight:600">0.98</span>
+        </div>
+        <div class="meter-bar">
+          <div class="meter-fill" id="fusionMeter" style="width: 98%;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 中部：多轮交互与认知推理流 -->
+    <section class="card" style="flex:1">
+      <div class="card-title">
+        <span>认知交互流 (Cognitive Flow)</span>
+        <span id="turnCounter" style="font-size:11px;color:var(--text-muted)">共 0 轮交互</span>
+      </div>
+
+      <div class="timeline" id="timeline">
+        <div class="turn-bubble success">
+          <div class="turn-header">
+            <span>系统就绪</span>
+            <span>刚进入会话</span>
+          </div>
+          <div class="turn-response">
+            FutureWork 自然交互核心已启动。支持中文/英文口语、手势指向、视线停留、点头确认、条件控制流与自动撤销。
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 右侧：生产力工具状态与记忆 -->
+    <section class="card">
+      <div class="card-title">
+        <span>全工具适配矩阵 (Adapters)</span>
+        <span style="font-size:11px;color:var(--text-muted)">7 个核心组件</span>
+      </div>
+
+      <div class="tool-list" id="toolList">
+        <div class="tool-chip"><span class="tool-name">🖥️ 系统窗口 (System)</span><span class="tool-count">7 项能力</span></div>
+        <div class="tool-chip"><span class="tool-name">📁 受控文件系统 (Filesystem)</span><span class="tool-count">11 项能力</span></div>
+        <div class="tool-chip"><span class="tool-name">💻 安全终端 (Terminal)</span><span class="tool-count">3 项能力</span></div>
+        <div class="tool-chip"><span class="tool-name">📊 生产力办公套件 (Productivity)</span><span class="tool-count">7 项能力</span></div>
+        <div class="tool-chip"><span class="tool-name">🌐 跨平台浏览器 (Browser)</span><span class="tool-count">4 项能力</span></div>
+        <div class="tool-chip"><span class="tool-name">🌿 版本控制 (Git VCS)</span><span class="tool-count">5 项能力</span></div>
+        <div class="tool-chip"><span class="tool-name">🔌 MCP 协议扩展 (MCP Adapter)</span><span class="tool-count">即插即用</span></div>
+      </div>
+
+      <div class="card-title" style="margin-top:8px">
+        <span>持久化情境记忆 (Memory)</span>
+        <span id="memoryStatus" style="font-size:11px;color:var(--text-muted)">已持久化</span>
+      </div>
+      <div id="memoryList" style="font-size:12px;color:var(--text-muted);display:flex;flex-direction:column;gap:4px">
+        <div>暂无新锚点</div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="input-bar">
+      <button class="btn" id="btnNod" title="模拟点头确认">😊 点头 (Nod)</button>
+      <button class="btn" id="btnShake" title="模拟摇头拒绝">🙅 摇头 (Shake)</button>
+      <button class="btn" id="btnPinch" title="模拟捏合操作">👌 捏合 (Pinch)</button>
+      <button class="btn" id="btnUndo" title="撤回上一次修改">↩️ 撤销 (Undo)</button>
+      <input type="text" class="text-input" id="cmdInput" placeholder="输入自然语言指令（例如：把 sales.csv 的 revenue 列求和，或者读取刚才那个文件）..." autocomplete="off">
+      <button class="btn btn-primary" id="btnSend">发送指令</button>
+    </div>
+    <div class="quick-bar">
+      <span style="color:var(--text-muted)">试试快速示例：</span>
+      <span class="quick-tag">列出目录 .</span>
+      <span class="quick-tag">生成一份关于 项目架构 的工作报告</span>
+      <span class="quick-tag">添加待办: 准备发布 v1.0 版本</span>
+      <span class="quick-tag">查看所有待办</span>
+      <span class="quick-tag">如果读取不存在文件失败了，就把 recovered 写入 ok.txt</span>
+      <span class="quick-tag">把 a.txt 复制到 b.txt 然后删除 b.txt</span>
+    </div>
+  </footer>
+
+  <script>
+    // 简单的视线光斑模拟绘制
+    const canvas = document.getElementById('gazeCanvas');
+    const ctx = canvas.getContext('2d');
+    let gazeX = 0.5, gazeY = 0.5;
+
+    function resizeCanvas() {
+      canvas.width = canvas.clientWidth;
+      canvas.height = canvas.clientHeight;
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      gazeX = (e.clientX - rect.left) / rect.width;
+      gazeY = (e.clientY - rect.top) / rect.height;
+      document.getElementById('gazeCoord').innerText = `(${gazeX.toFixed(2)}, ${gazeY.toFixed(2)})`;
+    });
+
+    function drawGaze() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // 网格
+      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+      ctx.lineWidth = 1;
+      for (let x = 0; x < canvas.width; x += 30) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke(); }
+      for (let y = 0; y < canvas.height; y += 30) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke(); }
+      
+      // 光斑
+      const px = gazeX * canvas.width;
+      const py = gazeY * canvas.height;
+      const grad = ctx.createRadialGradient(px, py, 2, px, py, 35);
+      grad.addColorStop(0, 'rgba(6, 182, 212, 0.8)');
+      grad.addColorStop(0.5, 'rgba(6, 182, 212, 0.2)');
+      grad.addColorStop(1, 'rgba(6, 182, 212, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(px, py, 35, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#06b6d4';
+      ctx.beginPath();
+      ctx.arc(px, py, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      requestAnimationFrame(drawGaze);
+    }
+    requestAnimationFrame(drawGaze);
+
+    // 通信与指令处理
+    async function sendTurn(text, extra = {}) {
+      if (!text && !extra.nod && !extra.shake && !extra.pinch && !extra.undo) return;
+      
+      const payload = {
+        text: text || '',
+        gaze: [gazeX, gazeY],
+        ...extra
+      };
+
+      try {
+        const res = await fetch('/api/interact', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        appendTurn(data);
+      } catch (err) {
+        appendTurn({
+          query: text,
+          feedback: '通信异常: ' + err.message,
+          status: 'error',
+          latency_ms: 0
+        });
+      }
+    }
+
+    let turnCount = 0;
+    function appendTurn(data) {
+      turnCount++;
+      document.getElementById('turnCounter').innerText = `共 ${turnCount} 轮交互`;
+      
+      const tl = document.getElementById('timeline');
+      const div = document.createElement('div');
+      div.className = `turn-bubble ${data.status || 'success'}`;
+      
+      div.innerHTML = `
+        <div class="turn-header">
+          <span>${data.intent_action || '对话控制'}</span>
+          <span>${data.latency_ms ? data.latency_ms.toFixed(1) + 'ms' : ''}</span>
+        </div>
+        ${data.query ? `<div class="turn-query">${escapeHtml(data.query)}</div>` : ''}
+        <div class="turn-response">${escapeHtml(data.feedback || '')}</div>
+        <div class="turn-meta">
+          <span>状态: ${data.status}</span>
+          ${data.confidence ? `<span>置信度: ${(data.confidence * 100).toFixed(0)}%</span>` : ''}
+        </div>
+      `;
+      tl.appendChild(div);
+      tl.scrollTop = tl.scrollHeight;
+
+      if (data.confidence) {
+        document.getElementById('fusionConf').innerText = data.confidence.toFixed(2);
+        document.getElementById('fusionMeter').style.width = (data.confidence * 100) + '%';
+      }
+      if (data.memory_entities) {
+        const memList = document.getElementById('memoryList');
+        memList.innerHTML = data.memory_entities.map(e => `<div>📌 ${escapeHtml(e.label || e.entity_id)} (${e.target_type})</div>`).join('') || '<div>暂无新锚点</div>';
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    const input = document.getElementById('cmdInput');
+    document.getElementById('btnSend').onclick = () => {
+      const val = input.value.trim();
+      if (!val) return;
+      input.value = '';
+      sendTurn(val);
+    };
+    input.onkeydown = (e) => { if (e.key === 'Enter') document.getElementById('btnSend').click(); };
+
+    document.getElementById('btnNod').onclick = () => sendTurn('', { nod: true });
+    document.getElementById('btnShake').onclick = () => sendTurn('', { shake: true });
+    document.getElementById('btnPinch').onclick = () => sendTurn('', { pinch: true });
+    document.getElementById('btnUndo').onclick = () => sendTurn('撤销');
+
+    document.querySelectorAll('.quick-tag').forEach(tag => {
+      tag.onclick = () => {
+        input.value = tag.innerText;
+        document.getElementById('btnSend').click();
+      };
+    });
+  </script>
+</body>
+</html>

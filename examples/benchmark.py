@@ -88,6 +88,13 @@ CORPUS = [
     ("把 TODO.md 看一下", "read_file"),
     ("把 config.json 看看", "read_file"),
     ("看一下 README.md", "unknown"),   # 未支持的说法，应落到追问而非乱执行
+    # 办公生产力套件指令
+    ("计算 sales.csv 的 revenue 列的 sum", "table_aggregate"),
+    ("生成一份关于 项目架构 的工作报告", "generate_report"),
+    ("提取 doc.md 的大纲", "extract_outline"),
+    ("添加待办: 准备发布 v1.0", "todo_add"),
+    ("查看所有待办", "todo_list"),
+    ("完成待办 v1.0", "todo_complete"),
 ]
 
 

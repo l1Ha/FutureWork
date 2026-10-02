@@ -24,6 +24,7 @@ from futurework.runtime.orchestrator import EventType, InteractionEvent, Orchest
 from futurework.sensory.facial import HeadPoseAnalyzer
 from futurework.sensory.gaze import GazeTracker, UIElement
 from futurework.sensory.gesture import GestureInterpreter, PointingResolver
+from futurework.sensory.temporal_aligner import StreamingPerceptionLoop, TemporalAlignmentBuffer
 from futurework.tools.registry import ToolRegistry
 from futurework.types import (
     EmotionType,
@@ -54,8 +55,49 @@ class FutureWorkSession:
         self.gaze = GazeTracker()
         self.pointing = PointingResolver()
         self.gestures = GestureInterpreter()
+        self.temporal_buffer = TemporalAlignmentBuffer()
+        self.streaming_loop = StreamingPerceptionLoop(
+            buffer=self.temporal_buffer,
+            on_aligned_frame=self._on_aligned_frame,
+        )
         self._last_gaze: Optional[GazeSignal] = None
         self._turns: List[TurnResult] = []
+
+    def _on_aligned_frame(self, frame) -> None:
+        """流式时间窗口对齐触发的回调。"""
+        # 将对齐的多模态帧封装为交互事件触发
+        event = InteractionEvent(
+            speech=frame.speech,
+            gestures=frame.gestures,
+            facial=frame.facial,
+            head_pose=frame.head_pose,
+            gaze=frame.gaze,
+        )
+        self._run(event)
+
+    def push_speech_stream(self, transcript: str, *, is_final: bool = True, timestamp: Optional[float] = None) -> Optional[TurnResult]:
+        """
+        向多模态流中推入实时语音识别文本片段。
+        当 is_final=True 时，自动结合过去 400ms 内出现的手势、视线和表情进行高斯加权时间对齐，并触发执行！
+        """
+        signal = SpeechSignal(transcript=transcript, is_final=is_final, timestamp=timestamp or time.time())
+        frame = self.streaming_loop.feed_speech(signal)
+        return self._turns[-1] if frame and self._turns else None
+
+    def push_gesture_stream(self, gesture: GestureType, position_3d: Tuple[float, float, float] = (0.5, 0.5, 0.5), timestamp: Optional[float] = None) -> None:
+        """向多模态流中推入实时手势识别事件。"""
+        sig = HandGestureSignal(gesture=gesture, position_3d=position_3d, timestamp=timestamp or time.time())
+        self.streaming_loop.feed_gestures([sig])
+
+    def push_gaze_stream(self, x: float, y: float, timestamp: Optional[float] = None) -> None:
+        """向多模态流中推入实时眼动注视坐标。"""
+        sig = self.gaze.update(x, y, timestamp=timestamp or time.time())
+        self.streaming_loop.feed_gaze(sig)
+
+    def push_facial_stream(self, emotion: EmotionType, timestamp: Optional[float] = None) -> None:
+        """向多模态流中推入实时表情识别结果。"""
+        sig = FacialSignal(primary_emotion=emotion, timestamp=timestamp or time.time())
+        self.streaming_loop.feed_facial(sig)
 
     # ==================================================================
     # 便捷交互方法

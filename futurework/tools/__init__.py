@@ -20,6 +20,7 @@ from futurework.tools.terminal_adapter import TerminalAdapter, EditorAdapter
 from futurework.tools.browser_adapter import BrowserAdapter
 from futurework.tools.vcs_adapter import VcsAdapter
 from futurework.tools.mcp_adapter import McpAdapter
+from futurework.tools.productivity_adapter import ProductivitySuiteAdapter
 from futurework.tools.registry import ToolRegistry, default_registry
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "BrowserAdapter",
     "VcsAdapter",
     "McpAdapter",
+    "ProductivitySuiteAdapter",
     "ToolRegistry",
     "default_registry",
 ]

@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -26,8 +27,10 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from futurework.cognition.compound import (
+    ConditionalFlow,
     Correction,
     detect_correction,
+    parse_conditional,
     split_respecting_quotes,
 )
 from futurework.cognition.dialogue import (
@@ -95,6 +98,13 @@ ACTION_TOOL_HINTS: Dict[str, str] = {
     "create_directory": "filesystem",
     "copy_file": "filesystem",
     "move_file": "filesystem",
+    "table_aggregate": "productivity",
+    "table_query": "productivity",
+    "generate_report": "productivity",
+    "extract_outline": "productivity",
+    "todo_add": "productivity",
+    "todo_list": "productivity",
+    "todo_complete": "productivity",
     "list_mcp_tools": "mcp",
     "call_mcp_tool": "mcp",
     "list_editors": "editor",
@@ -184,7 +194,8 @@ class Orchestrator:
         self.registry = registry or default_registry(workdir)
         self.fusion = MultimodalFusionEngine()
         self.parser = IntentParser()
-        self.dialogue = DialogueManager()
+        mem_path = os.path.join(workdir, ".futurework", "memory.json") if workdir else None
+        self.dialogue = DialogueManager(memory_path=mem_path)
         self.undo = UndoManager(capacity=undo_capacity)
         self.safety = SafetyGate()
         self.policy = SecurityPolicy()
@@ -218,6 +229,11 @@ class Orchestrator:
         correction = detect_correction(text)
         if correction is not None:
             return self._handle_correction(event, correction)
+
+        # ---------- 条件控制流 (如果...就...否则...) ----------
+        conditional = parse_conditional(text) if text else None
+        if conditional is not None:
+            return self._handle_conditional(event, conditional)
 
         # ---------- 复合指令 ----------
         segments = split_respecting_quotes(text) if text else []
@@ -368,6 +384,82 @@ class Orchestrator:
         )
         self._last_turn = turn
         self.bus.emit(Event(EventType.TURN_END, {"turn_id": turn_id, "compound": len(segments)}))
+        return turn
+
+    # ==================================================================
+    # 条件控制流 (如果...就...否则...)
+    # ==================================================================
+    def _handle_conditional(self, event: InteractionEvent, flow: ConditionalFlow) -> TurnResult:
+        """
+        执行带条件的自然控制流。
+
+        1. 执行 flow.initial_action（如"跑测试"或"读取 a.txt"）
+        2. 判定其结果是否符合 flow.condition_on（"success" 或 "failure"）
+        3. 符合则执行 flow.then_branch，不符合且有 flow.else_branch 则执行 else_branch
+        4. 统一反馈给用户自然语言执行链路结果
+        """
+        turn_id = uuid.uuid4().hex[:8]
+        started = time.perf_counter()
+        self._turn_count += 1
+        self.bus.emit(Event(EventType.TURN_START, {"turn_id": turn_id, "conditional": flow.describe()}))
+
+        # 步骤 1：执行前置条件动作
+        first_event = InteractionEvent(
+            speech=SpeechSignal(transcript=flow.initial_action),
+            gestures=event.gestures,
+            facial=event.facial,
+            head_pose=event.head_pose,
+            gaze=event.gaze,
+            environment_noise_level=event.environment_noise_level,
+        )
+        first_turn = self._interact_single(first_event, quiet=True)
+
+        # 步骤 2：判定条件真假
+        is_success = (first_turn.status is ExecutionStatus.SUCCESS)
+        matched = (is_success if flow.condition_on == "success" else not is_success)
+
+        second_action = None
+        branch_name = ""
+        if matched:
+            second_action = flow.then_branch
+            branch_name = "满足条件"
+        elif flow.else_branch:
+            second_action = flow.else_branch
+            branch_name = "未满足条件，进入否则分支"
+
+        # 步骤 3：执行选中的后续分支（若有）
+        if second_action:
+            second_event = InteractionEvent(
+                speech=SpeechSignal(transcript=second_action),
+                environment_noise_level=event.environment_noise_level,
+            )
+            second_turn = self._interact_single(second_event, quiet=True)
+            combined_text = f"前置「{flow.initial_action}」{'成功' if is_success else '失败'}（{first_turn.feedback.text}）；{branch_name}，已执行「{second_action}」：{second_turn.feedback.text}"
+            final_status = second_turn.status
+            level = second_turn.feedback.visual_alert_level
+            errors = first_turn.errors + second_turn.errors
+            executed = True
+            needs_confirmation = (second_turn.status is ExecutionStatus.PENDING_CONFIRMATION)
+        else:
+            combined_text = f"前置「{flow.initial_action}」{'成功' if is_success else '失败'}（{first_turn.feedback.text}）；条件未满足且无备选操作。"
+            final_status = first_turn.status
+            level = first_turn.feedback.visual_alert_level
+            errors = first_turn.errors
+            executed = is_success
+            needs_confirmation = False
+
+        turn = TurnResult(
+            turn_id=turn_id,
+            status=final_status,
+            feedback=SystemFeedback(text=combined_text, visual_alert_level=level),
+            executed=executed,
+            needs_confirmation=needs_confirmation,
+            latency_ms=(time.perf_counter() - started) * 1000,
+            stage_timings={},
+            errors=errors,
+        )
+        self._last_turn = turn
+        self.bus.emit(Event(EventType.TURN_END, {"turn_id": turn_id, "conditional_result": matched}))
         return turn
 
     # ==================================================================
@@ -577,8 +669,13 @@ class Orchestrator:
 
         # ---------- 阶段 8：记账 ----------
         self._record_undo(command, result, adapter)
-        if result.status is ExecutionStatus.SUCCESS and intent.grounded_target is not None:
-            self.dialogue.remember_target(intent.grounded_target)
+        if result.status is ExecutionStatus.SUCCESS:
+            if intent.grounded_target is not None:
+                self.dialogue.remember_target(intent.grounded_target)
+            else:
+                extracted = self._extract_target_from_command(command)
+                if extracted is not None:
+                    self.dialogue.remember_target(extracted)
         t0 = _mark("record", t0)
 
         # ---------- 阶段 9：反馈 ----------
@@ -667,6 +764,27 @@ class Orchestrator:
             **{**pending.model_dump(), "parameters": params, "requires_confirmation": False}
         )
 
+    def _extract_target_from_command(self, command: ToolCommand) -> Optional[GroundingTarget]:
+        """
+        从成功执行的工具命令中提取实体目标，供持久化工作记忆与指代消解。
+        """
+        action = command.action
+        args = command.args or {}
+        path = args.get("path") or args.get("destination") or args.get("source")
+        if path and isinstance(path, str):
+            target_type = "directory" if (action.endswith("directory") or action == "list_directory") else "file"
+            return GroundingTarget(
+                target_type=target_type,
+                target_id=path,
+                label=os.path.basename(path) or path,
+                metadata={"action": action, "tool": command.tool_name},
+            )
+        if "url" in args and isinstance(args["url"], str):
+            return GroundingTarget(target_type="url", target_id=args["url"], label=args["url"])
+        if "name" in args and isinstance(args["name"], str):
+            return GroundingTarget(target_type="window", target_id=args["name"], label=args["name"])
+        return None
+
     def _handle_control(self, intent: Intent) -> Optional[Tuple[SystemFeedback, ExecutionStatus]]:
         """
         处理无需调用工具的对话控制意图：拒绝、取消、撤销。
@@ -725,6 +843,17 @@ class Orchestrator:
             vcs = self.registry.get("vcs")
             if vcs is not None and hasattr(vcs, "rollback_last_commit"):
                 undo_fn = vcs.rollback_last_commit
+                compensation = Compensation.COMPENSATE
+
+        elif command.action in ("generate_report", "todo_add", "todo_complete"):
+            prod = self.registry.get("productivity")
+            if prod is not None and hasattr(prod, "restore"):
+                if command.action == "generate_report":
+                    out_path = result.data if isinstance(result.data, str) else command.args.get("output_path", "")
+                    snap_key = _abs_path(prod.workdir, out_path)
+                    undo_fn = lambda: prod.restore(snap_key)
+                else:
+                    undo_fn = lambda: prod.restore(prod._todos_file)
                 compensation = Compensation.COMPENSATE
 
         if undo_fn is None:
@@ -836,6 +965,7 @@ class Orchestrator:
 _IDEMPOTENT_ACTIONS = frozenset({
     "read_file", "list_directory", "list_windows", "system_info", "git_status",
     "git_diff", "git_log", "search_in_file", "get_working_directory", "history",
+    "table_aggregate", "table_query", "extract_outline", "todo_list",
     "list_mcp_tools", "list_editors",
 })
 
@@ -925,5 +1055,20 @@ def _describe_success(intent: Intent, result: ExecutionResult) -> str:
         return f"已创建目录 {intent.parameters.get('path', '')}"
     if action == "delete_file":
         return f"已删除 {intent.parameters.get('path', '')}（此操作不可恢复）"
+    if action == "table_aggregate" and isinstance(data, dict):
+        return f"已统计 {data.get('file')} 的 {data.get('column')} 列：{data.get('operation')} = {data.get('result')}"
+    if action == "table_query" and isinstance(data, list):
+        return f"查询到 {len(data)} 条匹配记录"
+    if action == "generate_report":
+        return f"已自动生成结构化工作报告：{data}"
+    if action == "extract_outline" and isinstance(data, list):
+        return f"已提取大纲结构，共 {len(data)} 个章节层级"
+    if action == "todo_add" and isinstance(data, dict):
+        return f"已记录待办「{data.get('task')}」（编号 {data.get('id')}）"
+    if action == "todo_list" and isinstance(data, list):
+        pending = sum(1 for t in data if not t.get("completed"))
+        return f"当前待办任务共 {len(data)} 项（未完成 {pending} 项）"
+    if action == "todo_complete" and isinstance(data, dict):
+        return f"已将待办「{data.get('task')}」标记为完成"
 
     return f"已完成：{action}"

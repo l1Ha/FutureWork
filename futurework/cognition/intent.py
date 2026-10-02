@@ -209,6 +209,67 @@ def get_default_rules() -> List[IntentRule]:
                 r"^append\s+(?P<content>.+?)\s+to\s+(?P<path>\S{1,200})",
             ],
         ),
+        # ---------------- 生产力与办公数据套件 (表格/报告/待办) ----------------
+        IntentRule(
+            category=IntentCategory.DOCUMENT_EDIT,
+            action="table_aggregate",
+            tool_hint="productivity",
+            priority=172,
+            patterns=[
+                r"^(?:计算|统计|求)\s*(?P<path>\S+\.(?:csv|tsv))\s*(?:的)?\s*(?P<column>\S+?)\s*(?:列)?\s*(?:的)?\s*(?P<operation>sum|mean|max|min|count|和|平均值|最大值|最小值|行数)$",
+                r"^(?:对|在)\s*(?P<path>\S+\.(?:csv|tsv))\s*(?:的)?\s*(?P<column>\S+?)\s*(?:列)?\s*(?:求|计算)\s*(?P<operation>sum|mean|max|min|count|和|平均值|最大值|最小值|行数)$",
+            ],
+        ),
+        IntentRule(
+            category=IntentCategory.DOCUMENT_EDIT,
+            action="generate_report",
+            tool_hint="productivity",
+            priority=171,
+            patterns=[
+                r"^(?:生成|创建|制作)(?:一份)?\s*(?:关于)?\s*(?P<title>\S+?)\s*(?:的)?\s*(?:工作报告|报告|周报|文档)$",
+                r"^(?:generate|create)\s+(?:a\s+)?report\s+(?:titled\s+)?(?P<title>\S.*)$",
+            ],
+        ),
+        IntentRule(
+            category=IntentCategory.DOCUMENT_EDIT,
+            action="extract_outline",
+            tool_hint="productivity",
+            priority=169,
+            patterns=[
+                r"^(?:提取|查看|显示|输出)\s*(?P<path>\S+?)\s*(?:的)?\s*(?:大纲|目录结构|结构)$",
+                r"^(?:extract|show)\s+(?:the\s+)?outline\s+of\s+(?P<path>\S+)$",
+            ],
+        ),
+        IntentRule(
+            category=IntentCategory.DOCUMENT_EDIT,
+            action="todo_add",
+            tool_hint="productivity",
+            priority=168,
+            patterns=[
+                r"^(?:添加|新建|记下|记录|增加)\s*(?:待办|任务|todo)[:：\s]\s*(?P<task>\S.*)$",
+                r"^(?:todo|add todo|todo add)\s+(?P<task>\S.*)$",
+            ],
+        ),
+        IntentRule(
+            category=IntentCategory.DOCUMENT_EDIT,
+            action="todo_list",
+            tool_hint="productivity",
+            priority=168,
+            patterns=[
+                r"^(?:查看|列出|显示|看看)\s*(?:所有)?\s*(?:待办|任务|todos?|todo 清单)$",
+                r"^(?:list|show)\s+todos?$",
+            ],
+        ),
+        IntentRule(
+            category=IntentCategory.DOCUMENT_EDIT,
+            action="todo_complete",
+            tool_hint="productivity",
+            priority=168,
+            patterns=[
+                r"^(?:完成|搞定|勾掉|结项)\s*(?:待办|任务)?\s*(?P<task_id_or_keyword>\S.*)$",
+                r"^(?:complete|done|finish)\s+todo\s+(?P<task_id_or_keyword>\S.*)$",
+            ],
+        ),
         IntentRule(
             category=IntentCategory.DOCUMENT_EDIT,
             action="copy_file",
@@ -247,6 +308,7 @@ def get_default_rules() -> List[IntentRule]:
             patterns=[
                 r"^(?:读取|读出|读一下|读)\s+(?:文件\s*)?(?P<path>\S{1,200})$",
                 r"^(?:读取|读出|读)(?P<path>[A-Za-z0-9._/~\\-]\S{0,199})$",
+                r"^(?:读取|读出|读一下|读|打开|查看)\s*(?:一下)?\s*(?:文件\s*)?(?P<path>(?:刚才|刚刚|之前|上一个|这个|那个)\S{0,20})$",
                 r"^(?:打开文件|查看文件)\s*(?P<path>\S{1,200})$",
                 # "把 TODO.md 看一下" —— 口语里把动作放在对象之后
                 r"^(?:把|将)?\s*(?P<path>\S+)\s*(?:看一下|看一眼|看看|瞧一下)$",
@@ -443,8 +505,8 @@ class IntentParser:
         self.semantic_threshold = semantic_threshold
         # 可插拔的语义编码器：提供后自动启用软匹配通道
         self._encoder: Optional[Callable[[str], List[float]]] = None
-        self._intent_texts: Dict[IntentCategory, str] = {}
-        self._embeddings: Dict[IntentCategory, List[float]] = {}
+        self._intent_texts: Dict[str, str] = {}
+        self._embeddings: Dict[str, Tuple[IntentCategory, str, List[float]]] = {}
 
     def set_encoder(self, encoder: Callable[[str], List[float]]) -> None:
         """注入句向量编码器（如 sentence-transformers / API），启用语义通道。"""
@@ -453,13 +515,13 @@ class IntentParser:
             self._intent_texts.clear()
             self._embeddings.clear()
             return
-        seen: Dict[IntentCategory, str] = {}
+        seen: Dict[str, str] = {}
         for rule in self.rules:
-            if rule.category not in seen:
+            if rule.action not in seen:
                 exemplar = _exemplar_for(rule)
-                seen[rule.category] = exemplar
+                seen[rule.action] = exemplar
                 try:
-                    self._embeddings[rule.category] = encoder(exemplar)
+                    self._embeddings[rule.action] = (rule.category, rule.action, encoder(exemplar))
                 except Exception:
                     continue
         self._intent_texts = seen
@@ -505,15 +567,14 @@ class IntentParser:
             requires_conf = rule.requires_confirmation
             explanation = f"命中规则「{rule.action}」"
         elif semantic is not None:
-            category, score = semantic
-            rule = next(r for r in self.rules if r.category is category)
+            category, action, score = semantic
+            rule = next((r for r in self.rules if r.action == action), None)
             confidence = score
             if fused is not None:
                 confidence *= _modality_factor(fused)
-            action = rule.action
             params = {}
-            requires_conf = rule.requires_confirmation or score < 0.6
-            explanation = f"语义匹配「{rule.action}」({score:.2f})"
+            requires_conf = rule.requires_confirmation if rule else (score < 0.6)
+            explanation = f"语义匹配「{action}」({score:.2f})"
         else:
             # 规则未命中，但可能只是一个"只说了动作"���半成品指令
             incomplete = self.detect_incomplete(normalized)
@@ -597,19 +658,19 @@ class IntentParser:
         return None
 
     # ------------------------------------------------------------------
-    def _semantic_match(self, text: str) -> Optional[Tuple[IntentCategory, float]]:
-        if self._encoder is None or not self._intent_texts or not text:
+    def _semantic_match(self, text: str) -> Optional[Tuple[IntentCategory, str, float]]:
+        if self._encoder is None or not self._embeddings or not text:
             return None
         try:
             query = self._encoder(text)
         except Exception:
             return None
-        best: Optional[Tuple[IntentCategory, float]] = None
-        for category, vector in self._embeddings.items():
+        best: Optional[Tuple[IntentCategory, str, float]] = None
+        for category, action, vector in self._embeddings.values():
             score = _cosine(query, vector)
-            if best is None or score > best[1]:
-                best = (category, score)
-        if best and best[1] >= self.semantic_threshold:
+            if best is None or score > best[2]:
+                best = (category, action, score)
+        if best and best[2] >= self.semantic_threshold:
             return best
         return None
 
@@ -698,6 +759,15 @@ def _exemplar_for(rule: IntentRule) -> str:
         "reject": "拒绝不要 no reject",
         "cancel": "取消操作 cancel stop",
         "undo": "撤销上一步 undo",
+        "copy_file": "复制文件 copy file",
+        "move_file": "移动文件 move file",
+        "table_aggregate": "统计表格数据 aggregate table",
+        "table_query": "查询表格数据 query table",
+        "generate_report": "生成工作报告 generate report",
+        "extract_outline": "提取文档大纲 extract outline",
+        "todo_add": "添加待办事项 add todo",
+        "todo_list": "查看所有待办 list todos",
+        "todo_complete": "完成待办任务 complete todo",
         "explain": "解释一下这是什么 explain what this is",
     }
     return samples.get(rule.action, rule.action.replace("_", " "))

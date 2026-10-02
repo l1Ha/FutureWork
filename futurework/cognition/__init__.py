@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+from futurework.cognition.compound import (
+    ConditionalFlow,
+    Correction,
+    detect_correction,
+    parse_conditional,
+    split_compound,
+    split_respecting_quotes,
+)
+from futurework.cognition.dialogue import Clarification, DialogueManager, DialogueState
 from futurework.cognition.intent import (
     IntentParser,
     IntentRule,
     get_default_rules,
 )
-from futurework.cognition.dialogue import DialogueState, DialogueManager, Clarification
+from futurework.cognition.memory import MemoryEntity, PersistentMemoryStore
 
 __all__ = [
     "IntentParser",
@@ -16,4 +25,12 @@ __all__ = [
     "DialogueState",
     "DialogueManager",
     "Clarification",
+    "MemoryEntity",
+    "PersistentMemoryStore",
+    "ConditionalFlow",
+    "Correction",
+    "parse_conditional",
+    "detect_correction",
+    "split_compound",
+    "split_respecting_quotes",
 ]

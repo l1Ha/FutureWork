@@ -209,3 +209,107 @@ def _restore(segment: str, protected: List[str]) -> str:
         return protected[index] if 0 <= index < len(protected) else m.group(0)
 
     return re.sub(r"\x00(\d+)\x00", _put, segment)
+
+
+# ---------------------------------------------------------------------------
+# 条件控制流指令 (如果...就...否则...)
+# ---------------------------------------------------------------------------
+@dataclass
+class ConditionalFlow:
+    """结构化条件控制流指令。"""
+
+    initial_action: str
+    condition_on: str = "success"  # "success" 或 "failure"
+    then_branch: str = ""
+    else_branch: Optional[str] = None
+
+    def describe(self) -> str:
+        res = f"如果执行「{self.initial_action}」{ '成功' if self.condition_on == 'success' else '失败' }，就「{self.then_branch}」"
+        if self.else_branch:
+            res += f"，否则「{self.else_branch}」"
+        return res
+
+
+_IF_PREFIX = r"^(?:如果|要是|若|假如|if)\s*"
+_THEN_CONNECTOR = r"\s*(?:，|,)?\s*(?:那么|就|then)\s*"
+_ELSE_CONNECTOR = r"\s*(?:，|,)?\s*(?:否则|不然|要不然|else)\s*"
+
+_COND_SUCCESS = r"(?:成功(?:了)?|通过(?:了)?|过了|ok|succeeded)"
+_COND_FAILURE = r"(?:失败(?:了)?|报错(?:了)?|挂了|出错了|failed|errors?)"
+
+
+def parse_conditional(text: str) -> Optional[ConditionalFlow]:
+    """
+    解析中文/英文自然语言中的条件控制流指令。
+
+    形式示例：
+    1. "如果跑测试成功了，就提交代码 feat: ok，否则读取 test.log"
+    2. "如果跑测试失败了，就读取 test.log"
+    3. "先运行 pytest，如果成功就提交代码"
+    4. "if run tests then commit feat: ok else read test.log"
+    """
+    if not text or len(text.strip()) < 5:
+        return None
+    raw = text.strip()
+
+    # 形式 1: "如果 <行动+状态> 就 <行动A> (否则 <行动B>)"
+    if re.match(_IF_PREFIX, raw, re.IGNORECASE):
+        body = re.sub(_IF_PREFIX, "", raw, count=1, flags=re.IGNORECASE)
+        # 查找 else 分支
+        else_parts = re.split(_ELSE_CONNECTOR, body, maxsplit=1, flags=re.IGNORECASE)
+        else_branch = else_parts[1].strip(" 　，,。.!！?？") if len(else_parts) > 1 else None
+        main_part = else_parts[0]
+
+        # 查找 then 分支
+        then_parts = re.split(_THEN_CONNECTOR, main_part, maxsplit=1, flags=re.IGNORECASE)
+        if len(then_parts) == 2:
+            cond_str = then_parts[0].strip()
+            then_branch = then_parts[1].strip(" 　，,。.!！?？")
+
+            # 分析 condition_on
+            condition_on = "success"
+            m_fail = re.search(_COND_FAILURE, cond_str, re.IGNORECASE)
+            m_succ = re.search(_COND_SUCCESS, cond_str, re.IGNORECASE)
+            if m_fail:
+                condition_on = "failure"
+                initial_action = re.sub(_COND_FAILURE, "", cond_str, flags=re.IGNORECASE).strip(" 的了")
+            elif m_succ:
+                condition_on = "success"
+                initial_action = re.sub(_COND_SUCCESS, "", cond_str, flags=re.IGNORECASE).strip(" 的了")
+            else:
+                # 默认当作动作，执行成功即满足条件
+                initial_action = cond_str
+
+            initial_action = initial_action.strip(" 　，,。.!！?？")
+            if initial_action and then_branch:
+                return ConditionalFlow(
+                    initial_action=initial_action,
+                    condition_on=condition_on,
+                    then_branch=then_branch,
+                    else_branch=else_branch,
+                )
+
+    # 形式 2: "<动作1>，如果 (成功|失败) 就 <动作2> (否则 <动作3>)"
+    m_mid_if = re.search(r"([，,;；]|\s+)(?:如果|要是|若|if)\s*", raw, re.IGNORECASE)
+    if m_mid_if:
+        initial_action = raw[:m_mid_if.start()].strip(" 　，,。.!！?？")
+        rest = raw[m_mid_if.end():].strip()
+
+        else_parts = re.split(_ELSE_CONNECTOR, rest, maxsplit=1, flags=re.IGNORECASE)
+        else_branch = else_parts[1].strip(" 　，,。.!！?？") if len(else_parts) > 1 else None
+        then_parts = re.split(_THEN_CONNECTOR, else_parts[0], maxsplit=1, flags=re.IGNORECASE)
+
+        if len(then_parts) == 2:
+            cond_state = then_parts[0].strip()
+            then_branch = then_parts[1].strip(" 　，,。.!！?？")
+            condition_on = "failure" if re.search(_COND_FAILURE, cond_state, re.IGNORECASE) else "success"
+
+            if initial_action and then_branch:
+                return ConditionalFlow(
+                    initial_action=initial_action,
+                    condition_on=condition_on,
+                    then_branch=then_branch,
+                    else_branch=else_branch,
+                )
+
+    return None
