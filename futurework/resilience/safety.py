@@ -153,11 +153,15 @@ class SafetyGate:
 
 @dataclass
 class SecurityPolicy:
-    """额外的安全约束：命令级黑名单与速率限制。"""
+    """
+    额外的安全约束：命令级黑名单与速率限制。
 
-    blocked_commands: Tuple[str, ...] = (
-        "rm -rf /", "mkfs", ":(){:|:&};:", "shutdown", "reboot",
-    )
+    黑名单**不在这里另写一份**——直接复用终端适配器的 ``inspect_command``。
+    两处各维护一套必然出现"改了一处忘了另一处"，而这类不一致的后果是
+    同一条命令走不同路径会得到两种不同的拒绝结果，甚至某一路径完全不拦。
+    本层只负责速率限制与跨工具的通用黑名单。
+    """
+
     max_commands_per_minute: int = 120
 
     _timestamps: List[float] = field(default_factory=list)
@@ -167,15 +171,20 @@ class SecurityPolicy:
 
     def block_reason(self, command: ToolCommand) -> Optional[str]:
         """
-        返回触发拦截的具体黑名单条目，便于对用户说清"到底哪一句被拦了"。
+        返回触发拦截的具体原因。
 
         只报动作名（``run_command``）对用户毫无意义——他知道自己说了什么，
         他需要知道的是"你这句话里的哪部分让我不敢执行"。
         """
-        blob = f"{command.action} {command.args}".lower()
-        for bad in self.blocked_commands:
-            if bad.lower() in blob:
-                return bad
+        if command.action in ("run_command", "call_mcp_tool"):
+            text = str((command.args or {}).get("command", ""))
+            if text:
+                # 复用终端层的同一份判定，保证两处结论一致
+                from futurework.tools.terminal_adapter import inspect_command
+
+                safe, why = inspect_command(text)
+                if not safe:
+                    return why
         return None
 
     def rate_ok(self, now: Optional[float] = None) -> bool:
@@ -190,9 +199,7 @@ class SecurityPolicy:
         """返回 ``None`` 表示放行。"""
         reason = self.block_reason(command)
         if reason is not None:
-            return ErrorCategory.SAFETY, (
-                f"含有「{reason}」的命令我不会执行——这类操作可能破坏系统。"
-            )
+            return ErrorCategory.SAFETY, reason
         if not self.rate_ok():
             return ErrorCategory.SAFETY, "操作过于频繁，已触发速率限制，请稍候"
         return None

@@ -15,14 +15,33 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import math
 import os
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
 from futurework.types import GroundingTarget
+
+# 所有存活的记忆库：进程退出时统一落盘。
+# 依赖 ``__del__`` 不可靠——CPython 的回收时机不保证，且一旦对象进入循环引用
+# 就可能永远不被回收。用 atexit 兜底，短脚本场景下记忆才不会丢。
+_LIVE_STORES: "List[PersistentMemoryStore]" = []
+_LIVE_LOCK = threading.Lock()
+
+
+def _flush_all_stores() -> None:
+    for store in list(_LIVE_STORES):
+        try:
+            store.flush()
+        except Exception:
+            pass
+
+
+atexit.register(_flush_all_stores)
 
 
 @dataclass
@@ -70,14 +89,49 @@ class PersistentMemoryStore:
     跨会话持久化记忆存储库。
     """
 
-    def __init__(self, storage_path: Optional[str] = None, *, max_entities: int = 200) -> None:
+    def __init__(
+        self,
+        storage_path: Optional[str] = None,
+        *,
+        max_entities: int = 200,
+        write_delay: float = 2.0,
+        max_write_delay: float = 10.0,
+    ) -> None:
         if storage_path:
             self.storage_path = os.path.abspath(storage_path)
         else:
             self.storage_path = os.path.join(os.getcwd(), ".futurework", "memory.json")
         self.max_entities = max_entities
         self._entities: Dict[str, MemoryEntity] = {}
+
+        # 写入合并：每次成功交互都全量重写 JSON 会让"读一个文件"也付出一次
+        # 完整写盘代价，在连续交互下迅速成为主要开销。改为延迟写——
+        # 首次改动后延迟 write_delay 落盘，期间若有新改动则以 max_write_delay
+        # 为上限强制写出，保证内存里"最近用过"的实体总能及时持久化。
+        self.write_delay = write_delay
+        self.max_write_delay = max_write_delay
+        self._dirty_since: Optional[float] = None
+        self._last_write: float = time.time()
+
+        self._flush_siblings()
         self.load()
+        with _LIVE_LOCK:
+            _LIVE_STORES.append(self)
+
+    def _flush_siblings(self) -> None:
+        """
+        把指向同一路径的其它存活记忆库的待写数据先落盘。
+
+        没有这一步，"开一个新会话"会读到陈旧的磁盘状态：上一个会话刚记录
+        的实体因为延迟写尚未落盘，于是"刚才那个文件"在新会话里就找不到了。
+        """
+        with _LIVE_LOCK:
+            others = [s for s in _LIVE_STORES if s is not self and s.storage_path == self.storage_path]
+        for store in others:
+            try:
+                store.flush()
+            except Exception:
+                pass
 
     def load(self) -> bool:
         """从磁盘加载历史记忆。"""
@@ -90,19 +144,33 @@ class PersistentMemoryStore:
             for item in data.get("entities", []):
                 entity = MemoryEntity(**item)
                 self._entities[entity.entity_id] = entity
+            self._last_write = time.time()
             return True
         except Exception:
             # 容错降级：不阻断主流程
             return False
 
-    def save(self) -> bool:
-        """保存当前记忆至磁盘文件。"""
+    def save(self, *, force: bool = False) -> bool:
+        """
+        保存当前记忆至磁盘。
+
+        非强制情况下遵守延迟写策略：距离上次落盘不足 ``write_delay`` 时跳过，
+        由后续任意一次触发补上。
+        """
+        now = time.time()
+        if not force:
+            if now - self._last_write < self.write_delay:
+                return False
+            # 迟迟不落盘会丢记忆，超过上限就强制写出
+            if self._dirty_since is not None and now - self._dirty_since < self.max_write_delay:
+                return False
+
         try:
             os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
             self._prune()
             payload = {
                 "version": "1.0",
-                "updated_at": time.time(),
+                "updated_at": now,
                 "entities": [asdict(e) for e in self._entities.values()],
             }
             # 原子写入防崩溃损坏
@@ -110,9 +178,17 @@ class PersistentMemoryStore:
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
             os.replace(temp_path, self.storage_path)
+            self._last_write = now
+            self._dirty_since = None
             return True
         except Exception:
             return False
+
+    def flush(self) -> bool:
+        """立即落盘（会话结束 / 进程退出时调用，确保不丢记忆）。"""
+        if self._dirty_since is None and os.path.exists(self.storage_path):
+            return True   # 已有最新数据在盘上，无需重复写
+        return self.save(force=True)
 
     def record_target(
         self,
@@ -141,6 +217,8 @@ class PersistentMemoryStore:
             )
             self._entities[key] = entity
 
+        if self._dirty_since is None:
+            self._dirty_since = time.time()
         self.save()
         return entity
 
@@ -220,6 +298,7 @@ class PersistentMemoryStore:
     def clear(self) -> None:
         """清空记忆。"""
         self._entities.clear()
+        self._dirty_since = None
         if os.path.exists(self.storage_path):
             try:
                 os.remove(self.storage_path)

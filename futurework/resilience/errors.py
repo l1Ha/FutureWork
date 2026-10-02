@@ -127,14 +127,20 @@ _SUGGESTIONS: dict = {
     ErrorCategory.TIMEOUT: "这一步耗时超出预期。可以再说一次，或把范围缩小（例如只处理一个文件）。",
     ErrorCategory.NOT_FOUND: "没有找到对应的东西。请确认名称或路径是否正确，或者我帮你列出可选项？",
     ErrorCategory.PERMISSION: "当前权限不足。你可以授权后重试，或告诉我换一个方式。",
-    ErrorCategory.SAFETY: "这个操作有风险，我需要你明确确认才会继续。",
     ErrorCategory.PERMANENT: "这个操作在当前环境无法完成。可以换一种说法或换个工具吗？",
     ErrorCategory.INTERNAL: "执行时出了点问题。我已经记录下来，你可以重试或换个方式。",
 }
 
+# 安全策略拒绝时使用：措辞刻意**不承诺"确认后可以继续"**。
+# 黑名单命中（下载执行、破坏系统）不是"待授权"，而是"不做"；
+# 若在这里说"确认就继续"，等于在教用户用一句"是"绕过安全底线。
+_SAFETY_REFUSAL = "这是安全底线，我不会执行，换个说法我也不会做——但我可以帮你完成它安全的那部分。"
+
 
 def human_readable(category: ErrorCategory, detail: str = "") -> str:
     """生成用户能直接听懂、且知道下一步做什么的反馈。"""
+    if category is ErrorCategory.SAFETY:
+        return f"{detail} {_SAFETY_REFUSAL}".strip() if detail else _SAFETY_REFUSAL
     base = _SUGGESTIONS.get(category, "出错了，请重试。")
     return f"{detail} {base}".strip() if detail else base
 

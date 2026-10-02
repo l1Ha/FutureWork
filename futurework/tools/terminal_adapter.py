@@ -32,6 +32,19 @@ DANGEROUS_PATTERNS: Tuple[Tuple[str, str], ...] = (
     (r"\bchown\s+-R\b.*\s+/(\s|$)", "全局属主变更"),
     (r">\s*/dev/sd[a-z]", "直接写磁盘设备"),
     (r"\bgit\s+push\s+.*--force(?!-with-lease)", "强制推送覆盖远端"),
+    # ---- 远程代码执行：最危险的一类，单独成组 ----
+    # 把下载到的内容直接喂给解释器，等于把机器控制权交给远端。
+    # 这类命令本地看不出任何破坏性，只有识别"下载 → 执行"的管道结构才能拦下。
+    (r"\b(curl|wget|fetch)\b[^|;]*\|\s*(sudo\s+)?(ba|z|k|fi)?sh\b", "下载远程脚本并直接执行"),
+    (r"\b(curl|wget)\b[^|;]*\|\s*(sudo\s+)?(python[23]?|perl|ruby|node)\b", "下载远程脚本并直接执行"),
+    (r"\beval\s*[\"'$`]", "eval 执行动态构造的代码"),
+    (r"\bbash\s+-c\s*[\"']?\$\(", "bash -c 执行拼接命令"),
+    (r"\bbase64\s+(-d|--decode)[^|;]*\|\s*(ba|z)?sh\b", "解码后直接执行"),
+    (r"\.\s*<\(\s*(curl|wget)", "执行远程下载的内容"),
+    (r"\bsource\s+<\(", "source 执行进程替换产生的代码"),
+    # 绕过审计的常见手法：先关掉记录再动手
+    (r"\bhistory\s+-c\b", "清除命令历史"),
+    (r"\bset\s+\+o\s+(history|noclobber)\b", "关闭 shell 安全选项"),
 )
 
 
@@ -45,7 +58,9 @@ def inspect_command(command: str) -> Tuple[bool, str]:
         return False, "命令为空"
     for pattern, reason in DANGEROUS_PATTERNS:
         if re.search(pattern, command, re.IGNORECASE):
-            return False, f"命令被安全策略拦截（{reason}）：{command}"
+            # 说明里只讲"为什么拒绝"，不复述整条命令：
+            # 命令可能很长，且复述会让拒绝理由被淹没。
+            return False, f"含有「{reason}」的命令我不会执行——执行它等于把这台机器的控制权交出去。"
     if len(command) > 4000:
         return False, "命令过长（>4000 字符），疑似异常输入"
     return True, "ok"

@@ -88,7 +88,8 @@ class TestPersistentMemory:
         store1 = PersistentMemoryStore(storage_path=mem_file)
         target = GroundingTarget(target_type="file", target_id="/tmp/doc.txt", label="重要文档")
         store1.record_target(target, context_tags=["doc", "finance"])
-        
+        store1.flush()   # 延迟写：需显式收尾，否则磁盘上还没有数据
+
         # 重新从磁盘加载到另一个对象
         store2 = PersistentMemoryStore(storage_path=mem_file)
         recent = store2.query_recent(limit=5)

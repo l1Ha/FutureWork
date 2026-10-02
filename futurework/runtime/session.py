@@ -211,6 +211,30 @@ class FutureWorkSession:
         """撤销上一步。"""
         return self.orchestrator.undo_last()
 
+    def close(self) -> None:
+        """
+        结束会话，把尚未落盘的持久化记忆立即写出。
+
+        记忆层为了性能采用延迟写，若不显式收尾，短会话里的最后一批记录
+        可能停留��内存中随进程退出而丢失。
+        """
+        try:
+            self.orchestrator.dialogue.memory.flush()
+        except Exception:
+            pass
+
+    def __enter__(self) -> "FutureWorkSession":
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def health(self) -> Dict[str, Any]:
         return self.orchestrator.health()
 
