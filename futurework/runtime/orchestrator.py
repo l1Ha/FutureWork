@@ -168,8 +168,9 @@ class TurnResult:
 
     def summary(self) -> str:
         stages = " ".join(f"{k}={v:.1f}ms" for k, v in self.stage_timings.items())
+        stages_part = f" | {stages}" if stages else ""
         return (
-            f"[{self.turn_id}] {self.status.value} | {self.feedback.text} | {stages} | 总计 {self.latency_ms:.1f}ms"
+            f"[{self.turn_id}] {self.status.value} | {self.feedback.text}{stages_part} | 总计 {self.latency_ms:.1f}ms"
         )
 
 

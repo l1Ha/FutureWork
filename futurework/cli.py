@@ -88,7 +88,13 @@ def _cmd_hud(args: argparse.Namespace) -> int:
     from futurework.web.server import run_web_hud
 
     print(f"正在启动 FutureWork 交互式多模态 Web HUD（端口 {args.port}）...")
-    run_web_hud(host=args.host, port=args.port, workdir=args.workdir, blocking=True)
+    run_web_hud(
+        host=args.host,
+        port=args.port,
+        workdir=args.workdir,
+        blocking=True,
+        auto_open=not args.no_browser,
+    )
     return 0
 
 
@@ -145,6 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_hud = sub.add_parser("hud", help="启动可视化 Web HUD 控制台")
     p_hud.add_argument("--host", default="127.0.0.1", help="监听地址 (默认 127.0.0.1)")
     p_hud.add_argument("--port", type=int, default=8765, help="监听端口 (默认 8765)")
+    p_hud.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     p_hud.set_defaults(func=_cmd_hud)
 
     parser.set_defaults(func=lambda a: _cmd_interactive(a))

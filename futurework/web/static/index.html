@@ -349,6 +349,22 @@
       </div>
 
       <div class="card-title" style="margin-top:8px">
+        <span>当前项目文件 (Files)</span>
+        <span onclick="loadFiles()" style="font-size:11px;color:var(--cyan);cursor:pointer">刷新</span>
+      </div>
+      <div id="fileList" style="font-size:12px;display:flex;flex-direction:column;gap:4px;max-height:130px;overflow-y:auto">
+        <div style="color:var(--text-muted)">正在加载文件...</div>
+      </div>
+
+      <div class="card-title" style="margin-top:8px">
+        <span>任务待办清单 (Todos)</span>
+        <span id="todoStats" style="font-size:11px;color:var(--text-muted)">0 项</span>
+      </div>
+      <div id="todoList" style="font-size:12px;display:flex;flex-direction:column;gap:4px;max-height:130px;overflow-y:auto">
+        <div style="color:var(--text-muted)">暂无待办事项</div>
+      </div>
+
+      <div class="card-title" style="margin-top:8px">
         <span>持久化情境记忆 (Memory)</span>
         <span id="memoryStatus" style="font-size:11px;color:var(--text-muted)">已持久化</span>
       </div>
@@ -487,7 +503,70 @@
         const memList = document.getElementById('memoryList');
         memList.innerHTML = data.memory_entities.map(e => `<div>📌 ${escapeHtml(e.label || e.entity_id)} (${e.target_type})</div>`).join('') || '<div>暂无新锚点</div>';
       }
+      loadFiles();
+      loadTodos();
     }
+
+    async function loadFiles() {
+      try {
+        const res = await fetch('/api/files');
+        const data = await res.json();
+        const fl = document.getElementById('fileList');
+        if (!data.files || data.files.length === 0) {
+          fl.innerHTML = '<div style="color:var(--text-muted)">工作目录为空</div>';
+          return;
+        }
+        fl.innerHTML = data.files.map(f => {
+          const icon = f.is_dir ? '📁' : (f.name.endsWith('.csv') ? '📊' : (f.name.endsWith('.md') ? '📝' : '📄'));
+          return `<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 6px;background:rgba(255,255,255,0.03);border-radius:4px;cursor:pointer" onclick="handleFileClick('${escapeHtml(f.name)}', ${f.is_dir})" title="点击快捷操作">
+            <span>${icon} ${escapeHtml(f.name)}</span>
+            <span style="font-size:10px;color:var(--text-muted)">${f.is_dir ? '目录' : (f.size ? (f.size > 1024 ? (f.size/1024).toFixed(1)+'KB' : f.size+'B') : '')}</span>
+          </div>`;
+        }).join('');
+      } catch (e) {}
+    }
+
+    function handleFileClick(name, isDir) {
+      if (isDir) {
+        document.getElementById('cmdInput').value = `列出目录 ${name}`;
+      } else if (name.endsWith('.csv')) {
+        document.getElementById('cmdInput').value = `计算 ${name} 的 某列 的 sum`;
+      } else {
+        document.getElementById('cmdInput').value = `读取 ${name}`;
+      }
+      document.getElementById('cmdInput').focus();
+    }
+
+    async function loadTodos() {
+      try {
+        const res = await fetch('/api/todos');
+        const data = await res.json();
+        const tl = document.getElementById('todoList');
+        const stats = document.getElementById('todoStats');
+        if (!data.todos || data.todos.length === 0) {
+          tl.innerHTML = '<div style="color:var(--text-muted)">暂无待办事项</div>';
+          stats.innerText = '0 项';
+          return;
+        }
+        const pending = data.todos.filter(t => !t.completed).length;
+        stats.innerText = `未完成 ${pending}/${data.todos.length}`;
+        tl.innerHTML = data.todos.map(t => {
+          const check = t.completed ? '✅' : '⬜';
+          const textStyle = t.completed ? 'text-decoration:line-through;color:var(--text-muted)' : 'color:#fff';
+          return `<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 6px;background:rgba(255,255,255,0.03);border-radius:4px;cursor:pointer" onclick="completeTodo('${escapeHtml(t.id)}')">
+            <span style="${textStyle}">${check} ${escapeHtml(t.task)}</span>
+            <span style="font-size:10px;color:var(--cyan)">${t.id}</span>
+          </div>`;
+        }).join('');
+      } catch (e) {}
+    }
+
+    function completeTodo(id) {
+      sendTurn(`完成待办 ${id}`);
+    }
+
+    loadFiles();
+    loadTodos();
 
     function escapeHtml(s) {
       return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

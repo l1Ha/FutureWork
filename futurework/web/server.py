@@ -42,6 +42,30 @@ class FutureWorkWebHandler(BaseHTTPRequestHandler):
             self._send_json(health)
             return
 
+        if self.path == "/api/files":
+            workdir = self.session.orchestrator.workdir or os.getcwd()
+            items = []
+            try:
+                for entry in sorted(os.listdir(workdir)):
+                    if entry.startswith(".") and entry != ".futurework":
+                        continue
+                    full = os.path.join(workdir, entry)
+                    items.append({
+                        "name": entry,
+                        "is_dir": os.path.isdir(full),
+                        "size": os.path.getsize(full) if os.path.isfile(full) else None,
+                    })
+            except Exception:
+                items = []
+            self._send_json({"workdir": workdir, "files": items})
+            return
+
+        if self.path == "/api/todos":
+            prod = self.session.orchestrator.registry.get("productivity")
+            todos = prod._load_todos() if (prod and hasattr(prod, "_load_todos")) else []
+            self._send_json({"todos": todos})
+            return
+
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def do_POST(self) -> None:
@@ -108,6 +132,7 @@ def run_web_hud(
     *,
     workdir: Optional[str] = None,
     blocking: bool = True,
+    auto_open: bool = False,
 ) -> ThreadingHTTPServer:
     """启动交互式 Web HUD 控制台服务器。"""
     session = FutureWorkSession(workdir=workdir)
@@ -123,6 +148,17 @@ def run_web_hud(
     BoundHandler.static_dir = static_dir
 
     server = ThreadingHTTPServer((host, port), BoundHandler)
+
+    if auto_open:
+        def _open_browser() -> None:
+            time.sleep(0.6)
+            try:
+                import webbrowser
+                webbrowser.open(f"http://{host}:{port}")
+            except Exception:
+                pass
+        threading.Thread(target=_open_browser, daemon=True).start()
+
     if blocking:
         print(f"FutureWork Web HUD 已启动：http://{host}:{port}")
         server.serve_forever()
