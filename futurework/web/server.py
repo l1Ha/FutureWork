@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -110,7 +111,10 @@ def run_web_hud(
 ) -> ThreadingHTTPServer:
     """启动交互式 Web HUD 控制台服务器。"""
     session = FutureWorkSession(workdir=workdir)
-    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+    if hasattr(sys, "_MEIPASS"):
+        static_dir = os.path.join(sys._MEIPASS, "futurework", "web", "static")
+    else:
+        static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
     class BoundHandler(FutureWorkWebHandler):
         pass

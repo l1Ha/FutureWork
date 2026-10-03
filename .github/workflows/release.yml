@@ -1,0 +1,149 @@
+name: Release Multi-Platform Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Linux Standalone Binary (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pydantic pyinstaller pillow
+
+      - name: Build Linux executable
+        run: |
+          pyinstaller \
+            --name futurework \
+            --onefile \
+            --paths "." \
+            --add-data "futurework/web/static:futurework/web/static" \
+            --clean \
+            packaging/entrypoint.py
+
+      - name: Assemble Linux release bundle
+        run: |
+          VERSION="${GITHUB_REF_NAME:-v0.1.0}"
+          BUNDLE="FutureWork-${VERSION}-linux-x86_64"
+          mkdir -p "dist/${BUNDLE}"
+          cp dist/futurework "dist/${BUNDLE}/"
+          cp packaging/linux/run_hud.sh "dist/${BUNDLE}/"
+          cp packaging/linux/install.sh "dist/${BUNDLE}/"
+          cp packaging/linux/futurework.desktop "dist/${BUNDLE}/"
+          cp packaging/icon.png "dist/${BUNDLE}/futurework.png"
+          cp README.md "dist/${BUNDLE}/"
+          cp LICENSE "dist/${BUNDLE}/"
+          chmod +x "dist/${BUNDLE}/"*.sh "dist/${BUNDLE}/futurework"
+          tar -czf "dist/${BUNDLE}.tar.gz" -C dist "${BUNDLE}"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-dist
+          path: dist/FutureWork-*-linux-x86_64.tar.gz
+
+  build-windows:
+    name: Build Windows Native App (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pydantic pyinstaller pillow
+
+      - name: Build Windows executable
+        run: |
+          pyinstaller --clean packaging/windows/futurework.spec
+
+      - name: Assemble Windows release bundle
+        run: |
+          $VERSION = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "v0.1.0" }
+          $BUNDLE = "FutureWork-${VERSION}-windows-x64"
+          $STAGING = "dist\${BUNDLE}"
+          New-Item -ItemType Directory -Force -Path $STAGING | Out-Null
+          Copy-Item "dist\futurework.exe" "$STAGING\"
+          Copy-Item "packaging\windows\futurework-hud.bat" "$STAGING\"
+          Copy-Item "packaging\icon.ico" "$STAGING\futurework.ico"
+          Copy-Item "README.md" "$STAGING\"
+          Copy-Item "LICENSE" "$STAGING\"
+          Compress-Archive -Path "$STAGING\*" -DestinationPath "dist\${BUNDLE}.zip" -Force
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-dist
+          path: dist/FutureWork-*-windows-x64.zip
+
+  build-android:
+    name: Build Standalone Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java 11 JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Build Android APK
+        run: |
+          python packaging/android/build_apk.py
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-dist
+          path: dist/FutureWork-*-android.apk
+
+  publish-release:
+    name: Publish Multi-Platform GitHub Release
+    needs: [build-linux, build-windows, build-android]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List release assets
+        run: ls -lh release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=FutureWork
+GenericName=Multimodal AI Productivity Core
+Comment=面向未来人机自然交互的全平台生产力工具对接核心
+Exec=futurework hud
+Icon=futurework
+Terminal=false
+Type=Application
+Categories=Development;Utility;Office;
+StartupNotify=true
+Keywords=AI;Multimodal;Voice;Gesture;Gaze;Productivity;
