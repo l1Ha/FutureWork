@@ -26,7 +26,21 @@ FutureWork 把这套交互范式提前做成一个可复用的软件接口——
 
 ---
 
-## 30 秒上手
+## 📦 全平台发行版下载 (Release Downloads)
+
+无需自行编译代码，直接下载已签名的对应平台发行版 App：
+
+| 目标平台 | 安装包下载 | 安装与启动方式 |
+| :--- | :--- | :--- |
+| **Android 手机 / 平板** | [**`FutureWork-0.1.0-android.apk`**](https://github.com/l1Ha/FutureWork/releases/download/v0.1.0/FutureWork-0.1.0-android.apk) *(80 KB)* | 下载后在 Android 设备上直接安装打开。内置 Web HUD、摇一摇拒绝、语音识别与触觉反馈。 |
+| **Linux (x86_64)** | [**`FutureWork-0.1.0-linux-x86_64.tar.gz`**](https://github.com/l1Ha/FutureWork/releases/download/v0.1.0/FutureWork-0.1.0-linux-x86_64.tar.gz) *(128 MB)* | 解压后运行 `./run_hud.sh` 启动，或运行 `./install.sh` 自动添加应用图标至系统启动器。 |
+| **Windows 10/11 (64位)** | [**`FutureWork-0.1.0-windows-x64.zip`**](https://github.com/l1Ha/FutureWork/releases/download/v0.1.0/FutureWork-0.1.0-windows-x64.zip) *(385 KB)* | 解压后双击 `futurework-hud.bat` 即可一键启动控制台并自动打开浏览器。 |
+
+👉 **[查看 GitHub Release 官方发布页面](https://github.com/l1Ha/FutureWork/releases/tag/v0.1.0)**
+
+---
+
+## 30 秒上手源码运行
 
 ```bash
 git clone https://github.com/l1Ha/FutureWork.git
