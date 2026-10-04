@@ -12,12 +12,31 @@ import json
 import os
 import sys
 import threading
+import time
+import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
 from futurework.runtime.session import FutureWorkSession
 from futurework.types import GestureType
+
+
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+def _probe_futurework_status(host: str, port: int) -> bool:
+    """探测指定端口上是否已有正在运行的 FutureWork Web HUD 实例。"""
+    probe_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
+    try:
+        req = urllib.request.Request(f"http://{probe_host}:{port}/api/status")
+        with urllib.request.urlopen(req, timeout=0.8) as resp:
+            data = json.loads(resp.read().decode())
+            return isinstance(data, dict) and "adapters" in data
+    except Exception:
+        return False
 
 
 class FutureWorkWebHandler(BaseHTTPRequestHandler):
@@ -133,7 +152,7 @@ def run_web_hud(
     workdir: Optional[str] = None,
     blocking: bool = True,
     auto_open: bool = False,
-) -> ThreadingHTTPServer:
+) -> Optional[ThreadingHTTPServer]:
     """启动交互式 Web HUD 控制台服务器。"""
     session = FutureWorkSession(workdir=workdir)
     if hasattr(sys, "_MEIPASS"):
@@ -147,21 +166,57 @@ def run_web_hud(
     BoundHandler.session = session
     BoundHandler.static_dir = static_dir
 
-    server = ThreadingHTTPServer((host, port), BoundHandler)
+    server = None
+    target_port = port
+    try:
+        server = ReusableThreadingHTTPServer((host, target_port), BoundHandler)
+    except OSError as err:
+        display_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
+        # 1. 检查是否已经是正在运行中的 FutureWork 实例
+        if _probe_futurework_status(host, target_port):
+            print(f"✓ 检测到 FutureWork Web HUD 已经在运行中：http://{display_host}:{target_port}")
+            if auto_open:
+                try:
+                    import webbrowser
+                    webbrowser.open(f"http://{display_host}:{target_port}")
+                except Exception:
+                    pass
+            print(f"提示：浏览器控制台已打开。如需重启或新建实例，请指定新端口（例如 --port {target_port + 1}）或先关闭已有进程。")
+            return None
 
+        # 2. 端口被其他非 FutureWork 程序占用，尝试自动顺延寻找空闲端口 (target_port + 1 ~ target_port + 20)
+        for candidate in range(target_port + 1, target_port + 21):
+            try:
+                server = ReusableThreadingHTTPServer((host, candidate), BoundHandler)
+                print(f"提示：端口 {target_port} 已被占用，已自动切换至空闲端口：http://{display_host}:{candidate}")
+                target_port = candidate
+                break
+            except OSError:
+                continue
+
+        if server is None:
+            print(f"错误：无法在端口 {target_port} 到 {target_port + 20} 之间绑定服务：{err}")
+            return None
+
+    display_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
     if auto_open:
         def _open_browser() -> None:
             time.sleep(0.6)
             try:
                 import webbrowser
-                webbrowser.open(f"http://{host}:{port}")
+                webbrowser.open(f"http://{display_host}:{target_port}")
             except Exception:
                 pass
         threading.Thread(target=_open_browser, daemon=True).start()
 
     if blocking:
-        print(f"FutureWork Web HUD 已启动：http://{host}:{port}")
-        server.serve_forever()
+        print(f"FutureWork Web HUD 已启动：http://{display_host}:{target_port}")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\n正在停止 FutureWork Web HUD 服务...")
+            server.shutdown()
+        return server
     else:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
