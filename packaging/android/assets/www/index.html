@@ -270,6 +270,22 @@
         <span class="modal-tag">REAL-TIME</span>
       </div>
 
+      <!-- 真实物理摄像头画面与开关 -->
+      <div class="sensor-item">
+        <div class="sensor-label">
+          <span>物理摄像头实时画面 (Webcam Vision)</span>
+          <button id="btnToggleCamera" class="btn" style="padding:2px 8px;font-size:11px;background:rgba(6,182,212,0.2);border-color:var(--cyan)">📷 开启摄像头</button>
+        </div>
+        <div id="cameraArea" style="display:none;position:relative;margin-top:4px">
+          <video id="webcamVideo" autoplay playsinline muted style="width:100%;height:140px;object-fit:cover;border-radius:6px;background:#000;transform:scaleX(-1)"></video>
+          <canvas id="cameraOverlay" style="position:absolute;top:0;left:0;width:100%;height:140px;pointer-events:none;transform:scaleX(-1)"></canvas>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:2px;display:flex;justify-content:space-between">
+            <span id="camFpsText">采样率: 4 FPS (实时低延迟)</span>
+            <span id="camFaceStatus" style="color:var(--cyan)">寻找人脸中...</span>
+          </div>
+        </div>
+      </div>
+
       <div class="sensor-item">
         <div class="sensor-label">
           <span>屏幕注视与眼动追踪 (Gaze)</span>
@@ -567,6 +583,117 @@
 
     loadFiles();
     loadTodos();
+
+    // ==========================================
+    // 物理摄像头捕获与实时视觉分析
+    // ==========================================
+    let cameraStream = null;
+    let cameraTimer = null;
+    const btnToggleCamera = document.getElementById('btnToggleCamera');
+    const cameraArea = document.getElementById('cameraArea');
+    const webcamVideo = document.getElementById('webcamVideo');
+    const cameraOverlay = document.getElementById('cameraOverlay');
+    const offscreenCanvas = document.createElement('canvas');
+    offscreenCanvas.width = 320;
+    offscreenCanvas.height = 240;
+    const offscreenCtx = offscreenCanvas.getContext('2d');
+    const overlayCtx = cameraOverlay.getContext('2d');
+
+    btnToggleCamera.onclick = async () => {
+      if (cameraStream) {
+        // 关闭摄像头
+        if (cameraTimer) clearInterval(cameraTimer);
+        cameraTimer = null;
+        cameraStream.getTracks().forEach(t => t.stop());
+        cameraStream = null;
+        webcamVideo.srcObject = null;
+        cameraArea.style.display = 'none';
+        btnToggleCamera.innerText = '📷 开启摄像头';
+        btnToggleCamera.style.background = 'rgba(6,182,212,0.2)';
+        btnToggleCamera.style.borderColor = 'var(--cyan)';
+      } else {
+        // 开启摄像头
+        try {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            alert('当前浏览器环境不支持获取摄像头。请使用主流现代浏览器（Chrome / Edge / Firefox / Safari），并允许网页访问摄像头权限。');
+            return;
+          }
+          cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+            audio: false
+          });
+          webcamVideo.srcObject = cameraStream;
+          cameraArea.style.display = 'block';
+          cameraOverlay.width = cameraArea.clientWidth || 280;
+          cameraOverlay.height = 140;
+          btnToggleCamera.innerText = '🛑 关闭摄像头';
+          btnToggleCamera.style.background = 'rgba(239,68,68,0.25)';
+          btnToggleCamera.style.borderColor = 'var(--red)';
+
+          cameraTimer = setInterval(captureAndProcessCameraFrame, 250);
+        } catch (err) {
+          alert('打开摄像头失败: ' + err.message + '\n请确认已插入摄像头并在浏览器地址栏左侧勾选允许摄像头权限。');
+        }
+      }
+    };
+
+    async function captureAndProcessCameraFrame() {
+      if (!cameraStream || webcamVideo.readyState !== 4) return;
+      
+      // 截取帧 (320x240 超低延迟尺寸)
+      offscreenCtx.drawImage(webcamVideo, 0, 0, 320, 240);
+      const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.55);
+
+      try {
+        const resp = await fetch('/api/vision/frame', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: dataUrl })
+        });
+        const data = await resp.json();
+        if (data.error) return;
+
+        // 联动 UI 面板
+        const statusSpan = document.getElementById('camFaceStatus');
+        if (data.face_detected) {
+          statusSpan.innerText = '✓ 人脸已锁定';
+          statusSpan.style.color = 'var(--green)';
+        } else {
+          statusSpan.innerText = '未检测到人脸';
+          statusSpan.style.color = 'var(--text-muted)';
+        }
+
+        // 视线联动
+        if (data.gaze_x !== undefined && data.gaze_y !== undefined) {
+          gazeX = data.gaze_x;
+          gazeY = data.gaze_y;
+          document.getElementById('gazeCoord').innerText = `(${gazeX.toFixed(2)}, ${gazeY.toFixed(2)})`;
+        }
+
+        // 手势联动
+        if (data.gesture && data.gesture !== 'idle') {
+          document.getElementById('gestureLabel').innerText = data.gesture.toUpperCase();
+        }
+
+        // 表情与注意力
+        if (data.primary_emotion) {
+          document.getElementById('emotionLabel').innerText = data.primary_emotion.toUpperCase();
+        }
+        if (data.attention_score !== undefined) {
+          document.getElementById('attentionVal').innerText = data.attention_score.toFixed(2);
+          document.getElementById('attentionMeter').style.width = (data.attention_score * 100) + '%';
+        }
+
+        // 离散头势动作自动触发
+        if (data.nod) {
+          sendTurn('', { nod: true });
+        } else if (data.shake) {
+          sendTurn('', { shake: true });
+        }
+      } catch (e) {
+        // 网络/处理异常静默处理
+      }
+    }
 
     function escapeHtml(s) {
       return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

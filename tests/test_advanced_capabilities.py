@@ -257,5 +257,60 @@ class TestWebHudServer:
                 data = json.loads(resp.read().decode("utf-8"))
                 assert data["status"] == "success"
                 assert "条目" in data["feedback"]
+
+            # 3. 测试 GET /api/vision/status
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/vision/status") as resp:
+                assert resp.status == 200
+                v_data = json.loads(resp.read().decode("utf-8"))
+                assert "camera_available" in v_data
         finally:
             server.shutdown()
+
+
+# ============================================================================
+# 6. 真实摄像头感知与视觉追踪测试
+# ============================================================================
+class TestCameraVisionTracking:
+    def test_real_camera_tracker_processing(self):
+        import cv2
+        import numpy as np
+        from futurework.sensory.camera_tracker import RealCameraTracker
+
+        tracker = RealCameraTracker()
+        
+        # 构造带有标准几何特征的测试画面 (人脸 + 双眼 + 微笑嘴形)
+        img = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.ellipse(img, (320, 240), (120, 160), 0, 0, 360, (200, 200, 200), -1)
+        cv2.circle(img, (270, 200), 20, (50, 50, 50), -1)
+        cv2.circle(img, (370, 200), 20, (50, 50, 50), -1)
+        cv2.ellipse(img, (320, 300), (40, 20), 0, 0, 180, (50, 50, 50), -1)
+
+        result = tracker.process_frame(img)
+        assert result.face_detected is True
+        assert result.face_box is not None
+        assert result.facial_signal is not None
+        assert result.head_pose_signal is not None
+        assert result.gaze_signal is not None
+        assert 0.0 <= result.gaze_signal.screen_x <= 1.0
+
+        # 测试字典序列化
+        res_dict = result.to_dict()
+        assert res_dict["face_detected"] is True
+        assert "primary_emotion" in res_dict
+        assert "gaze_x" in res_dict
+
+    def test_camera_process_jpeg_bytes(self):
+        import cv2
+        import numpy as np
+        from futurework.sensory.camera_tracker import RealCameraTracker
+
+        tracker = RealCameraTracker()
+        img = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.ellipse(img, (320, 240), (120, 160), 0, 0, 360, (200, 200, 200), -1)
+        cv2.circle(img, (270, 200), 20, (50, 50, 50), -1)
+        cv2.circle(img, (370, 200), 20, (50, 50, 50), -1)
+
+        _, jpg = cv2.imencode(".jpg", img)
+        result = tracker.process_image_bytes(jpg.tobytes())
+        assert result.face_detected is True
+

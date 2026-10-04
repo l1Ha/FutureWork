@@ -8,6 +8,7 @@ FutureWork 可视化 HUD 与交互式 Web 控制台服务端 (Web HUD & Interact
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sys
@@ -19,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
 from futurework.runtime.session import FutureWorkSession
+from futurework.sensory.camera_tracker import RealCameraTracker
 from futurework.types import GestureType
 
 
@@ -59,6 +61,11 @@ class FutureWorkWebHandler(BaseHTTPRequestHandler):
         if self.path == "/api/status":
             health = self.session.health()
             self._send_json(health)
+            return
+
+        if self.path == "/api/vision/status":
+            avail, reason = self.camera_tracker.is_available()
+            self._send_json({"camera_available": avail, "reason": reason})
             return
 
         if self.path == "/api/files":
@@ -130,6 +137,44 @@ class FutureWorkWebHandler(BaseHTTPRequestHandler):
             self._send_json(resp)
             return
 
+        if self.path == "/api/vision/frame":
+            length = int(self.headers.get("Content-Length", 0))
+            raw_body = self.rfile.read(length)
+            content_type = self.headers.get("Content-Type", "")
+
+            image_bytes = None
+            if "application/json" in content_type:
+                try:
+                    payload = json.loads(raw_body.decode("utf-8"))
+                    data_url = payload.get("image", "")
+                    if "," in data_url:
+                        image_bytes = base64.b64decode(data_url.split(",", 1)[1])
+                except Exception:
+                    pass
+            else:
+                image_bytes = raw_body
+
+            if not image_bytes:
+                self._send_json({"error": "缺少有效图像帧数据"})
+                return
+
+            try:
+                res = self.camera_tracker.process_image_bytes(image_bytes)
+                # 注入会话多模态流中
+                if res.facial_signal:
+                    self.session.streaming_loop.feed_facial(res.facial_signal)
+                if res.head_pose_signal:
+                    self.session.streaming_loop.feed_head_pose(res.head_pose_signal)
+                if res.gaze_signal:
+                    self.session.streaming_loop.feed_gaze(res.gaze_signal)
+                if res.gesture_signal:
+                    self.session.streaming_loop.feed_gestures([res.gesture_signal])
+
+                self._send_json(res.to_dict())
+            except Exception as exc:
+                self._send_json({"error": f"图像处理异常：{type(exc).__name__}: {exc}"})
+            return
+
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def _send_json(self, data: dict) -> None:
@@ -152,9 +197,11 @@ def run_web_hud(
     workdir: Optional[str] = None,
     blocking: bool = True,
     auto_open: bool = False,
+    camera_index: int = 0,
 ) -> Optional[ThreadingHTTPServer]:
     """启动交互式 Web HUD 控制台服务器。"""
     session = FutureWorkSession(workdir=workdir)
+    tracker = RealCameraTracker(device_index=camera_index)
     if hasattr(sys, "_MEIPASS"):
         static_dir = os.path.join(sys._MEIPASS, "futurework", "web", "static")
     else:
@@ -164,6 +211,7 @@ def run_web_hud(
         pass
 
     BoundHandler.session = session
+    BoundHandler.camera_tracker = tracker
     BoundHandler.static_dir = static_dir
 
     server = None

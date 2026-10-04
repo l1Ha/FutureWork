@@ -9,6 +9,10 @@
 
 from __future__ import annotations
 
+from futurework.sensory.camera_tracker import (
+    CameraPerceptionResult,
+    RealCameraTracker,
+)
 from futurework.sensory.facial import (
     FacialExpressionAnalyzer,
     HeadPoseAnalyzer,
@@ -42,4 +46,6 @@ __all__ = [
     "WorkingMemory",
     "TemporalAlignmentBuffer",
     "StreamingPerceptionLoop",
+    "RealCameraTracker",
+    "CameraPerceptionResult",
 ]

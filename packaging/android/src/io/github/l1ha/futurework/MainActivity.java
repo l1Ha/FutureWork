@@ -11,6 +11,7 @@ import android.speech.RecognizerIntent;
 import android.view.KeyEvent;
 import android.view.Window;
 import android.view.WindowManager;
+import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -60,7 +61,12 @@ public class MainActivity extends Activity implements SensorEventListener {
         settings.setDisplayZoomControls(false);
 
         mWebView.setWebViewClient(new WebViewClient());
-        mWebView.setWebChromeClient(new WebChromeClient());
+        mWebView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onPermissionRequest(final PermissionRequest request) {
+                request.grant(request.getResources());
+            }
+        });
         mWebView.addJavascriptInterface(new WebAppInterface(this), "AndroidBridge");
     }
 

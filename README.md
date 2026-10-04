@@ -313,25 +313,39 @@ P95 远低于人类感知流畅阈值（300ms，平均约 0.6ms，快了 400 倍
 
 ---
 
-## 接入真实硬件
+## 接入真实摄像头与硬件
 
-每个感知模块都有**纯函数式信号处理**与**硬件采集**两条路径。
-接口不变，换实现即可：
+每个感知模块都提供**真实硬件采集**与**函数式模拟**两条路径。
+
+### 1. 真实摄像头即插即用 (Real Camera & Vision Tracker)
+内置基于 OpenCV 的计算机视觉追踪器 (`RealCameraTracker`)，开箱支持电脑 USB 摄像头、笔记本自带前置摄像头以及 Android 手机镜头：
+
+```python
+from futurework.sensory.camera_tracker import RealCameraTracker
+
+# 探测摄像头硬件可用性
+available, info = RealCameraTracker.is_available(device_index=0)
+print(info)
+
+# 启动后台实时感知（自动输出人脸/表情/头动/视线/手势）
+tracker = RealCameraTracker(device_index=0)
+tracker.start(callback=lambda res: print(f"检测到手势: {res.gesture_signal.gesture.value}，视线: ({res.gaze_signal.screen_x:.2f}, {res.gaze_signal.screen_y:.2f})"))
+```
+
+- **Web HUD 实时画面**：在浏览器访问 `http://127.0.0.1:8765`，点击左侧面板上的 **「📷 开启摄像头」**，即可在网页端调用本机真实摄像头，自动识别人脸、实时计算注视坐标并与控制台联动；
+- **手势几何与凸缺陷分析**：无须依赖笨重 GPU，直接在 CPU 上以 30fps 分析肤色轮廓与凸缺陷，实时分类单指指向 (Point)、张开手掌 (Stop)、握拳 (Undo)、竖拇指 (Thumbs Up)；
+- **真实视线与眨眼估算**：通过眼部级联分类器与人脸中心相对偏移，动态计算注视点并镜像映射到屏幕归一化坐标；
+- **离线安全保证**：未插入摄像头时系统自动降级为视线画布模拟与脚本回放，CI 与无头服务器可 100% 稳定运行。
+
+### 2. 语音与其他硬件扩展
 
 ```python
 # 语音：换成 Whisper 或云端 ASR
 recognizer = SpeechRecognizer(backend=WhisperBackend(model="large-v3"))
 
-# 手势：换成 MediaPipe / 深度学习模型
-class MlHandTracker:
-    def classify(self, landmarks, *, hand="right"):
-        return my_model(landmarks)     # 返回 HandGestureSignal
-
 # 视线：无眼动仪时退化为头部朝向近似
 x, y = head_direction_to_screen(yaw, pitch)
 ```
-
-无硬件时全部走 `Simulated*` 源，因此**离线可测、可回归、可进 CI**。
 
 ---
 
