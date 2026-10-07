@@ -271,46 +271,78 @@ class TestWebHudServer:
 # 6. 真实摄像头感知与视觉追踪测试
 # ============================================================================
 class TestCameraVisionTracking:
-    def test_real_camera_tracker_processing(self):
+    def _synthetic_frame(self):
+        """构造带几何人脸特征的测试帧（Haar 可检出；DNN 按设计会拒绝）。"""
         import cv2
         import numpy as np
-        from futurework.sensory.camera_tracker import RealCameraTracker
 
-        tracker = RealCameraTracker()
-        
-        # 构造带有标准几何特征的测试画面 (人脸 + 双眼 + 微笑嘴形)
-        img = np.zeros((480, 640, 3), dtype=np.uint8)
+        img = np.full((480, 640, 3), 120, dtype=np.uint8)
         cv2.ellipse(img, (320, 240), (120, 160), 0, 0, 360, (200, 200, 200), -1)
         cv2.circle(img, (270, 200), 20, (50, 50, 50), -1)
         cv2.circle(img, (370, 200), 20, (50, 50, 50), -1)
         cv2.ellipse(img, (320, 300), (40, 20), 0, 0, 180, (50, 50, 50), -1)
+        return img
 
-        result = tracker.process_frame(img)
-        assert result.face_detected is True
-        assert result.face_box is not None
-        assert result.facial_signal is not None
-        assert result.head_pose_signal is not None
-        assert result.gaze_signal is not None
-        assert 0.0 <= result.gaze_signal.screen_x <= 1.0
-
-        # 测试字典序列化
-        res_dict = result.to_dict()
-        assert res_dict["face_detected"] is True
-        assert "primary_emotion" in res_dict
-        assert "gaze_x" in res_dict
-
-    def test_camera_process_jpeg_bytes(self):
-        import cv2
-        import numpy as np
+    def test_yunet_engine_loaded_by_default(self):
+        """回归：真实画面召回率低的根因是 Haar——主引擎必须是 YuNet DNN。"""
         from futurework.sensory.camera_tracker import RealCameraTracker
 
         tracker = RealCameraTracker()
-        img = np.zeros((480, 640, 3), dtype=np.uint8)
-        cv2.ellipse(img, (320, 240), (120, 160), 0, 0, 360, (200, 200, 200), -1)
-        cv2.circle(img, (270, 200), 20, (50, 50, 50), -1)
-        cv2.circle(img, (370, 200), 20, (50, 50, 50), -1)
+        assert tracker.engine_name == "yunet-dnn", "YuNet 主引擎未加载"
 
-        _, jpg = cv2.imencode(".jpg", img)
+    def test_haar_fallback_detects_synthetic_geometry(self):
+        """
+        Haar 回退引擎仍能识别合成几何人脸（保证无模型环境下可用）。
+
+        注意：合成图形对 YuNet DNN 不是人脸——DNN 按设计拒绝它，
+        这正是它对真实照片召回率远高于 Haar 的原因，不能作为 DNN 的判据。
+        """
+        import cv2
+        from futurework.sensory.camera_tracker import RealCameraTracker
+
+        tracker = RealCameraTracker(model_path="/nonexistent/yunet.onnx")
+        assert tracker.engine_name == "haar-cascade-fallback"
+
+        result = tracker.process_frame(self._synthetic_frame())
+        assert result.face_detected is True
+        assert result.face_box is not None
+        assert result.facial_signal is not None
+        assert result.gaze_signal is not None
+        assert 0.0 <= result.gaze_signal.screen_x <= 1.0
+
+        res_dict = result.to_dict()
+        assert res_dict["face_detected"] is True
+        assert "primary_emotion" in res_dict and "gaze_x" in res_dict
+
+    def test_processing_is_thread_safe(self):
+        """HTTP 服务端每请求一线程，视觉状态必须串行化。"""
+        import threading
+        from futurework.sensory.camera_tracker import RealCameraTracker
+
+        tracker = RealCameraTracker(model_path="/nonexistent/yunet.onnx")
+        frame = self._synthetic_frame()
+        errors = []
+
+        def worker():
+            try:
+                for _ in range(5):
+                    tracker.process_frame(frame, annotate=False)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []
+
+    def test_camera_process_jpeg_bytes(self):
+        import cv2
+        from futurework.sensory.camera_tracker import RealCameraTracker
+
+        tracker = RealCameraTracker(model_path="/nonexistent/yunet.onnx")
+        _, jpg = cv2.imencode(".jpg", self._synthetic_frame())
         result = tracker.process_image_bytes(jpg.tobytes())
         assert result.face_detected is True
 

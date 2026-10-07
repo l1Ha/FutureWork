@@ -71,7 +71,19 @@ class CameraPerceptionResult:
 class RealCameraTracker:
     """
     真实摄像头驱动与计算机视觉分析器。
+
+    人脸检测采用双引擎策略：
+    1. **YuNet DNN 检测器**（OpenCV 官方轻量模型，随包内置）——
+       对真实摄像头画面（光照多变、距离较远、侧脸、低对比度）的召回率
+       远高于 Haar 级联，CPU 上单帧约 10~20ms；
+    2. **Haar 级联族回退**（alt2 → default → alt → profile，配合 CLAHE）——
+       在 YuNet 模型缺失或加载失败时兜底，保证任何环境都能运行。
     """
+
+    # YuNet 检测输入统一缩放到该宽度以内：更小分辨率对 DNN 召回几乎无影响，
+    # 却能把单帧推理时间压到 10ms 级。
+    YUNET_MAX_WIDTH = 480
+    YUNET_SCORE_THRESHOLD = 0.55
 
     def __init__(
         self,
@@ -80,16 +92,42 @@ class RealCameraTracker:
         frame_width: int = 640,
         frame_height: int = 480,
         cascade_dir: Optional[str] = None,
+        model_path: Optional[str] = None,
     ) -> None:
         self.device_index = device_index
         self.frame_width = frame_width
         self.frame_height = frame_height
 
-        # 加载 OpenCV Haar 特征级联分类器
+        # ---- 主引擎：YuNet DNN 人脸检测器（随包内置，无需联网下载） ----
+        self._yunet: Optional[Any] = None
+        self._yunet_input_size: Optional[Tuple[int, int]] = None
+        bundled_model = model_path or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "models", "face_detection_yunet_2023mar.onnx"
+        )
+        if os.path.isfile(bundled_model):
+            try:
+                self._yunet = cv2.FaceDetectorYN.create(
+                    bundled_model,
+                    config="",
+                    input_size=(320, 240),
+                    score_threshold=self.YUNET_SCORE_THRESHOLD,
+                    nms_threshold=0.3,
+                    top_k=5,
+                )
+            except Exception:
+                self._yunet = None
+
+        # ---- 回退引擎：OpenCV Haar 特征级联分类器族 ----
         cascade_path = cascade_dir or cv2.data.haarcascades
         self.face_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_default.xml"))
+        self.face_cascade_alt2 = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_alt2.xml"))
+        self.face_cascade_alt = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_alt.xml"))
+        self.face_cascade_profile = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_profileface.xml"))
         self.eye_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_eye.xml"))
         self.smile_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_smile.xml"))
+
+        # 自适应对比度增强器 (CLAHE)，解决逆光、暗光与强光人脸失配
+        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
         # 内部认知感知分析器
         self.facial_analyzer = FacialExpressionAnalyzer()
@@ -101,6 +139,10 @@ class RealCameraTracker:
         self._face_center_ema: Optional[Tuple[float, float]] = None
         self._last_face_time: float = 0.0
 
+        # 视觉处理串行锁：ThreadingHTTPServer 每个请求一个线程，
+        # 而表情/头动/视线分析器都持有跨帧状态，必须串行化避免竞态。
+        self._vision_lock = threading.RLock()
+
         # 后台线程采集控制
         self._cap: Optional[cv2.VideoCapture] = None
         self._running = False
@@ -108,6 +150,13 @@ class RealCameraTracker:
         self._lock = threading.Lock()
         self._latest_result: Optional[CameraPerceptionResult] = None
         self._on_result_callbacks: List[Callable[[CameraPerceptionResult], None]] = []
+
+    # ------------------------------------------------------------------
+    # 引擎状态
+    # ------------------------------------------------------------------
+    @property
+    def engine_name(self) -> str:
+        return "yunet-dnn" if self._yunet is not None else "haar-cascade-fallback"
 
     # ------------------------------------------------------------------
     # 硬件可用性检查
@@ -140,30 +189,35 @@ class RealCameraTracker:
     ) -> CameraPerceptionResult:
         """
         处理单张 BGR 格式的图像帧，综合输出面部、视线、头动、手势多模态感知。
+
+        全程持有 ``_vision_lock``：表情/头动/视线分析器都携带跨帧状态，
+        而 HTTP 服务端是每请求一线程，不串行化会产生竞态。
         """
+        with self._vision_lock:
+            return self._process_frame_locked(frame, timestamp, annotate=annotate)
+
+    def _process_frame_locked(
+        self,
+        frame: np.ndarray,
+        timestamp: Optional[float],
+        *,
+        annotate: bool,
+    ) -> CameraPerceptionResult:
         now_ts = timestamp or time.time()
         h, w = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         annotated = frame.copy() if annotate else None
 
-        # 1. 人脸检测
-        faces = self.face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.15,
-            minNeighbors=4,
-            minSize=(int(w * 0.12), int(h * 0.12)),
-        )
+        # 1. 人脸检测：YuNet DNN 主引擎 → Haar 级联族回退（CLAHE 均衡 + 多模型）
+        face_box = self._detect_face(frame, gray, w, h)
 
-        face_detected = len(faces) > 0
-        face_box = None
+        face_detected = face_box is not None
         facial_signal: Optional[FacialSignal] = None
         head_pose_signal: Optional[HeadPoseSignal] = None
         gaze_signal: Optional[GazeSignal] = None
 
         if face_detected:
-            # 取面积最大的人脸作为主用户
-            fx, fy, fw, fh = max(faces, key=lambda b: b[2] * b[3])
-            face_box = (int(fx), int(fy), int(fw), int(fh))
+            fx, fy, fw, fh = face_box
             face_roi_gray = gray[fy : fy + fh, fx : fx + fw]
 
             # 1.1 头部姿态分析：计算人脸中心相对画面中心偏移
@@ -276,6 +330,77 @@ class RealCameraTracker:
                     pass
 
         return res
+
+    # ------------------------------------------------------------------
+    # 人脸检测双引擎：YuNet DNN 主引擎 + Haar 级联族回退
+    # ------------------------------------------------------------------
+    def _detect_face(
+        self,
+        frame: np.ndarray,
+        gray: np.ndarray,
+        w: int,
+        h: int,
+    ) -> Optional[Tuple[int, int, int, int]]:
+        """
+        返回画面中最大人脸的 ``(x, y, w, h)`` 框；未检出返回 ``None``。
+
+        YuNet 是 OpenCV 官方的轻量 DNN 人脸检测器，对真实摄像头画面
+        （光照多变、远距离、轻微侧脸）的召回率远高于 Haar 级联。
+        Haar 族在模型缺失时兜底，并配合 CLAHE 对比度均衡提升暗光表现。
+        """
+        # ---------- 主引擎：YuNet ----------
+        if self._yunet is not None:
+            try:
+                det_w = min(w, self.YUNET_MAX_WIDTH)
+                det_h = max(1, int(h * det_w / w))
+                if (det_w, det_h) != self._yunet_input_size:
+                    self._yunet.setInputSize((det_w, det_h))
+                    self._yunet_input_size = (det_w, det_h)
+
+                det_frame = frame
+                if det_w != w:
+                    det_frame = cv2.resize(frame, (det_w, det_h))
+
+                _, faces = self._yunet.detect(det_frame)
+                if faces is not None and len(faces) > 0:
+                    scale_back = w / float(det_w)
+                    best = max(faces, key=lambda f: f[2] * f[3])
+                    x, y, fw, fh = best[:4]
+                    # 框略外扩，便于眼睛/嘴部 ROI 检测
+                    fw *= 1.08
+                    fh *= 1.08
+                    return (
+                        max(0, int(x * scale_back)),
+                        max(0, int(y * scale_back)),
+                        min(w, int(fw * scale_back)),
+                        min(h, int(fh * scale_back)),
+                    )
+                return None
+            except Exception:
+                # YuNet 推理异常时降级到 Haar，不让视觉链路中断
+                self._yunet = None
+
+        # ---------- 回退引擎：Haar 级联族（CLAHE 均衡 + 多模型回退） ----------
+        gray_eq = self._clahe.apply(gray)
+        min_dim = max(24, int(min(w, h) * 0.08))
+        min_face_size = (min_dim, min_dim)
+
+        for cascade in (
+            self.face_cascade_alt2,
+            self.face_cascade,
+            self.face_cascade_alt,
+            self.face_cascade_profile,
+        ):
+            faces = cascade.detectMultiScale(
+                gray_eq,
+                scaleFactor=1.08,
+                minNeighbors=3,
+                minSize=min_face_size,
+            )
+            if len(faces) > 0:
+                fx, fy, fw, fh = max(faces, key=lambda b: b[2] * b[3])
+                return (int(fx), int(fy), int(fw), int(fh))
+        return None
 
     # ------------------------------------------------------------------
     # 图像字节流快捷处理 (支持 Web HUD 前端上传)

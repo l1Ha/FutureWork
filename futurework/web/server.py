@@ -65,7 +65,11 @@ class FutureWorkWebHandler(BaseHTTPRequestHandler):
 
         if self.path == "/api/vision/status":
             avail, reason = self.camera_tracker.is_available()
-            self._send_json({"camera_available": avail, "reason": reason})
+            self._send_json({
+                "camera_available": avail,
+                "reason": reason,
+                "engine": self.camera_tracker.engine_name,
+            })
             return
 
         if self.path == "/api/files":

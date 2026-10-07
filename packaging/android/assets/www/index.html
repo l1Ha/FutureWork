@@ -277,10 +277,10 @@
           <button id="btnToggleCamera" class="btn" style="padding:2px 8px;font-size:11px;background:rgba(6,182,212,0.2);border-color:var(--cyan)">📷 开启摄像头</button>
         </div>
         <div id="cameraArea" style="display:none;position:relative;margin-top:4px">
-          <video id="webcamVideo" autoplay playsinline muted style="width:100%;height:140px;object-fit:cover;border-radius:6px;background:#000;transform:scaleX(-1)"></video>
+          <video id="webcamVideo" autoplay playsinline muted style="width:100%;height:140px;object-fit:contain;border-radius:6px;background:#000;transform:scaleX(-1)"></video>
           <canvas id="cameraOverlay" style="position:absolute;top:0;left:0;width:100%;height:140px;pointer-events:none;transform:scaleX(-1)"></canvas>
           <div style="font-size:10px;color:var(--text-muted);margin-top:2px;display:flex;justify-content:space-between">
-            <span id="camFpsText">采样率: 4 FPS (实时低延迟)</span>
+            <span id="camFpsText">采样率: 5 FPS (实时低延迟)</span>
             <span id="camFaceStatus" style="color:var(--cyan)">寻找人脸中...</span>
           </div>
         </div>
@@ -589,6 +589,7 @@
     // ==========================================
     let cameraStream = null;
     let cameraTimer = null;
+    let cameraBusy = false;   // 防止上一帧未处理完就堆积新请求
     const btnToggleCamera = document.getElementById('btnToggleCamera');
     const cameraArea = document.getElementById('cameraArea');
     const webcamVideo = document.getElementById('webcamVideo');
@@ -630,7 +631,7 @@
           btnToggleCamera.style.background = 'rgba(239,68,68,0.25)';
           btnToggleCamera.style.borderColor = 'var(--red)';
 
-          cameraTimer = setInterval(captureAndProcessCameraFrame, 250);
+          cameraTimer = setInterval(captureAndProcessCameraFrame, 200);
         } catch (err) {
           alert('打开摄像头失败: ' + err.message + '\n请确认已插入摄像头并在浏览器地址栏左侧勾选允许摄像头权限。');
         }
@@ -638,12 +639,25 @@
     };
 
     async function captureAndProcessCameraFrame() {
-      if (!cameraStream || webcamVideo.readyState !== 4) return;
-      
-      // 截取帧 (320x240 超低延迟尺寸)
-      offscreenCtx.drawImage(webcamVideo, 0, 0, 320, 240);
-      const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.55);
+      if (!cameraStream || cameraBusy) return;
+      // readyState 2 (HAVE_CURRENT_DATA) 起即可取帧；部分浏览器直播流长期停在 2/3，
+      // 只等 4 会永远取不到画面
+      if (webcamVideo.readyState < 2 || !webcamVideo.videoWidth) return;
 
+      // 保持视频原始宽高比截取（640x480 原生分辨率，保证远距离小脸也有足够像素）
+      const vw = webcamVideo.videoWidth || 640;
+      const vh = webcamVideo.videoHeight || 480;
+      const targetW = 480;
+      const targetH = Math.round((vh / vw) * targetW) || 360;
+      if (offscreenCanvas.width !== targetW || offscreenCanvas.height !== targetH) {
+        offscreenCanvas.width = targetW;
+        offscreenCanvas.height = targetH;
+      }
+
+      offscreenCtx.drawImage(webcamVideo, 0, 0, targetW, targetH);
+      const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.75);
+
+      cameraBusy = true;
       try {
         const resp = await fetch('/api/vision/frame', {
           method: 'POST',
@@ -653,13 +667,32 @@
         const data = await resp.json();
         if (data.error) return;
 
-        // 联动 UI 面板
+        // 联动 UI 面板与人脸框高亮覆盖
         const statusSpan = document.getElementById('camFaceStatus');
-        if (data.face_detected) {
+        const overlayW = cameraOverlay.width;
+        const overlayH = cameraOverlay.height;
+        overlayCtx.clearRect(0, 0, overlayW, overlayH);
+
+        if (data.face_detected && data.face_box) {
           statusSpan.innerText = '✓ 人脸已锁定';
           statusSpan.style.color = 'var(--green)';
+
+          // 在覆盖画布上画出青色人脸框
+          const [fx, fy, fw, fh] = data.face_box;
+          const scaleX = overlayW / targetW;
+          const scaleY = overlayH / targetH;
+          overlayCtx.strokeStyle = '#06b6d4';
+          overlayCtx.lineWidth = 2.5;
+          overlayCtx.strokeRect(fx * scaleX, fy * scaleY, fw * scaleX, fh * scaleY);
+          
+          // 显示表情标签
+          if (data.primary_emotion) {
+            overlayCtx.fillStyle = '#06b6d4';
+            overlayCtx.font = 'bold 11px sans-serif';
+            overlayCtx.fillText(data.primary_emotion.toUpperCase(), fx * scaleX, Math.max(14, fy * scaleY - 4));
+          }
         } else {
-          statusSpan.innerText = '未检测到人脸';
+          statusSpan.innerText = '寻找人脸中...';
           statusSpan.style.color = 'var(--text-muted)';
         }
 
@@ -692,6 +725,8 @@
         }
       } catch (e) {
         // 网络/处理异常静默处理
+      } finally {
+        cameraBusy = false;
       }
     }
 
