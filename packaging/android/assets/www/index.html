@@ -546,11 +546,25 @@
       if (isDir) {
         document.getElementById('cmdInput').value = `列出目录 ${name}`;
       } else if (name.endsWith('.csv')) {
-        document.getElementById('cmdInput').value = `计算 ${name} 的 某列 的 sum`;
+        // 读取 CSV 表头，自动填入第一个数值列，避免生成用户还要手改的无效指令
+        document.getElementById('cmdInput').value = `计算 ${name} 的 ... 的 sum`;
+        document.getElementById('cmdInput').focus();
+        loadCsvColumns(name);
+        return;
       } else {
         document.getElementById('cmdInput').value = `读取 ${name}`;
       }
       document.getElementById('cmdInput').focus();
+    }
+
+    async function loadCsvColumns(name) {
+      try {
+        const resp = await fetch(`/api/csv/columns?name=${encodeURIComponent(name)}`);
+        const data = await resp.json();
+        if (!data.columns || !data.columns.length) return;
+        const numeric = data.columns.find(c => c.numeric) || data.columns[0];
+        document.getElementById('cmdInput').value = `计算 ${name} 的 ${numeric.name} 的 sum`;
+      } catch (e) {}
     }
 
     async function loadTodos() {
@@ -590,6 +604,9 @@
     let cameraStream = null;
     let cameraTimer = null;
     let cameraBusy = false;   // 防止上一帧未处理完就堆积新请求
+    let lastNodState = false; // 头势边沿检测状态
+    let lastShakeState = false;
+    let lastGestureFire = 0;  // 上次触发时间戳（冷却用）
     const btnToggleCamera = document.getElementById('btnToggleCamera');
     const cameraArea = document.getElementById('cameraArea');
     const webcamVideo = document.getElementById('webcamVideo');
@@ -717,11 +734,24 @@
           document.getElementById('attentionMeter').style.width = (data.attention_score * 100) + '%';
         }
 
-        // 离散头势动作自动触发
-        if (data.nod) {
+        // 离散头势动作自动触发（边沿触发防重复）
+        // 滑动窗口内的 nod/shake 会持续为真约 1~2 秒；若每帧都发，
+        // 一次点头会连发 5~10 次授权请求。只在"未点头 -> 点头"的
+        // 上升沿触发一次，且加 1.5 秒冷却。
+        const nowTs = Date.now();
+        if (data.nod && !lastNodState && nowTs - lastGestureFire > 1500) {
+          lastNodState = true;
+          lastGestureFire = nowTs;
           sendTurn('', { nod: true });
-        } else if (data.shake) {
+        } else if (!data.nod) {
+          lastNodState = false;
+        }
+        if (data.shake && !lastShakeState && nowTs - lastGestureFire > 1500) {
+          lastShakeState = true;
+          lastGestureFire = nowTs;
           sendTurn('', { shake: true });
+        } else if (!data.shake) {
+          lastShakeState = false;
         }
       } catch (e) {
         // 网络/处理异常静默处理

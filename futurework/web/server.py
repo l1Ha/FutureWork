@@ -96,6 +96,38 @@ class FutureWorkWebHandler(BaseHTTPRequestHandler):
             self._send_json({"todos": todos})
             return
 
+        if self.path.startswith("/api/csv/columns"):
+            import csv as _csv
+            from urllib.parse import parse_qs, urlparse
+
+            query = parse_qs(urlparse(self.path).query)
+            name = (query.get("name") or [""])[0]
+            workdir = self.session.orchestrator.workdir or os.getcwd()
+            # 只允许简单文件名，防路径穿越
+            safe_name = os.path.basename(name)
+            full = os.path.join(workdir, safe_name)
+            columns = []
+            try:
+                if os.path.isfile(full):
+                    with open(full, "r", encoding="utf-8-sig", errors="replace") as f:
+                        reader = _csv.DictReader(f)
+                        headers = reader.fieldnames or []
+                        sample = [row for _, row in zip(range(20), reader)]
+                    for col in headers:
+                        values = []
+                        for row in sample:
+                            raw = str(row.get(col, "")).strip().replace(",", "")
+                            try:
+                                values.append(float(raw))
+                            except ValueError:
+                                pass
+                        numeric = len(values) > 0 and len(values) >= len(sample) * 0.6
+                        columns.append({"name": col, "numeric": numeric})
+            except Exception:
+                columns = []
+            self._send_json({"name": safe_name, "columns": columns})
+            return
+
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def do_POST(self) -> None:
