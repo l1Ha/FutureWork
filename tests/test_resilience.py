@@ -180,32 +180,47 @@ class TestCircuitBreaker:
             breaker.call(lambda: time.sleep(5))
         assert time.perf_counter() - start < 0.1   # 立即失败，不等待
 
+    @staticmethod
+    def _wait_half_open(breaker: CircuitBreaker, timeout: float = 3.0) -> CircuitState:
+        """
+        轮询等待熔断器冷却进入 HALF_OPEN。
+
+        不赌单次 sleep 的精度：Windows CI 高负载下 sleep 与单调钟的
+        抖动竞争曾让 sleep(0.06) vs 0.05s 超时的判定偶发翻转。
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if breaker.state is not CircuitState.OPEN:
+                return breaker.state
+            time.sleep(0.01)
+        return breaker.state
+
     def test_half_open_after_cooldown(self):
         breaker = CircuitBreaker(name="t", failure_threshold=1, recovery_timeout=0.05)
         breaker.record_failure()
         assert breaker.state is CircuitState.OPEN
-        time.sleep(0.06)
-        assert breaker.state is CircuitState.HALF_OPEN
+        assert self._wait_half_open(breaker) is CircuitState.HALF_OPEN
 
     def test_recovers_after_success_in_half_open(self):
         breaker = CircuitBreaker(name="t", failure_threshold=1, recovery_timeout=0.05)
         breaker.record_failure()
-        time.sleep(0.06)
+        assert self._wait_half_open(breaker) is CircuitState.HALF_OPEN
         breaker.record_success()
         assert breaker.state is CircuitState.CLOSED
 
     def test_reopens_on_failure_in_half_open(self):
         breaker = CircuitBreaker(name="t", failure_threshold=1, recovery_timeout=0.05)
         breaker.record_failure()
-        time.sleep(0.06)
+        assert self._wait_half_open(breaker) is CircuitState.HALF_OPEN
         breaker.record_failure()
         assert breaker.state is CircuitState.OPEN
 
     def test_single_success_does_not_close(self):
         breaker = CircuitBreaker(name="t", failure_threshold=1, recovery_timeout=0.05)
         breaker.record_failure()
-        time.sleep(0.06)
+        assert self._wait_half_open(breaker) is CircuitState.HALF_OPEN
         breaker.record_success()
+        assert breaker.state is CircuitState.CLOSED
         breaker.record_failure()   # 又失败了
         assert breaker.state is CircuitState.OPEN
 
