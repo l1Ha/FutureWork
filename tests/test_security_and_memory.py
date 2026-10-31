@@ -126,7 +126,7 @@ class TestRefusalIsNotConfirmable:
     def test_confirmation_still_works_for_reversible_risk(self, tmp_path):
         """可撤销的高风险操作仍走正常确认流程，不能一刀切。"""
         target = tmp_path / "t.txt"
-        target.write_text("data")
+        target.write_text("data", encoding="utf-8")
         session = TextSession(workdir=str(tmp_path))
         assert session.run("删除文件 t.txt").status is ExecutionStatus.PENDING_CONFIRMATION
         assert session.nod().status is ExecutionStatus.SUCCESS
@@ -175,13 +175,13 @@ class TestMemoryWriteCoalescing:
         assert not os.path.exists(str(tmp_path / "m.json"))
 
     def test_memory_survives_across_sessions_with_defer(self, tmp_path):
-        (tmp_path / "plan.md").write_text("# plan")
+        (tmp_path / "plan.md").write_text("# plan", encoding="utf-8")
         with TextSession(workdir=str(tmp_path)) as first:
             first.run("读取 plan.md")
         second = TextSession(workdir=str(tmp_path))
         turn = second.run("把 刚才那个文件 复制到 b.md")
         assert turn.status is ExecutionStatus.SUCCESS
-        assert (tmp_path / "b.md").read_text() == "# plan"
+        assert (tmp_path / "b.md").read_text(encoding="utf-8") == "# plan"
 
     def test_close_flushes_pending_writes(self, tmp_path):
         session = TextSession(workdir=str(tmp_path))
@@ -198,7 +198,7 @@ class TestMemoryWriteCoalescing:
 # ============================================================================
 class TestLatencyBudget:
     def test_interaction_stays_sub_10ms(self, tmp_path):
-        (tmp_path / "a.txt").write_text("x" * 1000)
+        (tmp_path / "a.txt").write_text("x" * 1000, encoding="utf-8")
         session = TextSession(workdir=str(tmp_path))
         latencies = [session.run("读取 a.txt").latency_ms for _ in range(20)]
         assert max(latencies) < 10.0, f"最大延迟 {max(latencies):.1f}ms 超出预算"

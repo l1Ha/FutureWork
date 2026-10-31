@@ -118,7 +118,7 @@ class TestIncompleteIntent:
 class TestCompoundExecution:
     @pytest.fixture
     def session(self, tmp_path) -> TextSession:
-        (tmp_path / "a.txt").write_text("hello")
+        (tmp_path / "a.txt").write_text("hello", encoding="utf-8")
         return TextSession(workdir=str(tmp_path))
 
     def test_both_actions_executed(self, session, tmp_path):
@@ -132,7 +132,7 @@ class TestCompoundExecution:
         assert "hello" in session.last.feedback.text
 
     def test_stops_on_failure(self, session, tmp_path):
-        (tmp_path / "keep.txt").write_text("x")
+        (tmp_path / "keep.txt").write_text("x", encoding="utf-8")
         turn = session.run("把 不存在.txt 复制到 d.txt 然后删除 keep.txt")
         assert turn.status is ExecutionStatus.FAILED
         # 关键：第一步失败后，绝不能继续执行破坏性的第二步
@@ -185,7 +185,7 @@ class TestCorrectionFlow:
         assert not (tmp_path / "w.txt").exists()
 
     def test_rewrite_with_full_instruction(self, session, tmp_path):
-        (tmp_path / "src.txt").write_text("data")
+        (tmp_path / "src.txt").write_text("data", encoding="utf-8")
         session.run("把 world 写入 w.txt")
         turn = session.run("不对，读取 src.txt")
         assert turn.status is ExecutionStatus.SUCCESS
@@ -197,7 +197,7 @@ class TestCorrectionFlow:
         assert turn.feedback.text          # 必须给出可读回应，不能崩
 
     def test_correction_clears_pending(self, session, tmp_path):
-        (tmp_path / "x.txt").write_text("x")
+        (tmp_path / "x.txt").write_text("x", encoding="utf-8")
         session.run("删除文件 x.txt")
         assert session.orchestrator.dialogue.pending is not None
         session.run("不对")
@@ -210,7 +210,7 @@ class TestCorrectionFlow:
 class TestSlotContinuation:
     @pytest.fixture
     def session(self, tmp_path) -> TextSession:
-        (tmp_path / "a.txt").write_text("hello")
+        (tmp_path / "a.txt").write_text("hello", encoding="utf-8")
         return TextSession(workdir=str(tmp_path))
 
     def test_bare_verb_asks_for_missing_slot(self, session):
@@ -230,7 +230,7 @@ class TestSlotContinuation:
         assert turn.status is ExecutionStatus.SUCCESS
 
     def test_answer_with_new_command_not_treated_as_slot(self, session, tmp_path):
-        (tmp_path / "b.txt").write_text("other")
+        (tmp_path / "b.txt").write_text("other", encoding="utf-8")
         session.run("读取")
         turn = session.run("读取 b.txt")
         assert "other" in turn.feedback.text
@@ -246,7 +246,7 @@ class TestSlotContinuation:
 # ============================================================================
 class TestFeedbackChannels:
     def test_callback_receives_full_feedback(self, tmp_path):
-        (tmp_path / "a.txt").write_text("x")
+        (tmp_path / "a.txt").write_text("x", encoding="utf-8")
         session = TextSession(workdir=str(tmp_path))
         seen = []
         session.on_feedback(lambda fb, turn: seen.append(fb))

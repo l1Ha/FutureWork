@@ -60,23 +60,23 @@ class TestConditionalFlow:
             assert flow.else_branch is not None and expected_else in flow.else_branch
 
     def test_conditional_success_triggers_then_branch(self, tmp_path):
-        (tmp_path / "exist.txt").write_text("content")
+        (tmp_path / "exist.txt").write_text("content", encoding="utf-8")
         session = TextSession(workdir=str(tmp_path))
         turn = session.run("如果读取 exist.txt 成功了，就把 ok 写入 res.txt 否则把 err 写入 res.txt")
         assert turn.status is ExecutionStatus.SUCCESS
-        assert (tmp_path / "res.txt").read_text() == "ok"
+        assert (tmp_path / "res.txt").read_text(encoding="utf-8") == "ok"
 
     def test_conditional_failure_triggers_else_branch(self, tmp_path):
         session = TextSession(workdir=str(tmp_path))
         turn = session.run("如果读取 nonexistent.txt 成功了，就把 ok 写入 res2.txt 否则把 fallback 写入 res2.txt")
         assert turn.status is ExecutionStatus.SUCCESS
-        assert (tmp_path / "res2.txt").read_text() == "fallback"
+        assert (tmp_path / "res2.txt").read_text(encoding="utf-8") == "fallback"
 
     def test_conditional_failure_only_branch(self, tmp_path):
         session = TextSession(workdir=str(tmp_path))
         turn = session.run("如果读取 nonexistent.txt 失败了，就把 recovered 写入 res3.txt")
         assert turn.status is ExecutionStatus.SUCCESS
-        assert (tmp_path / "res3.txt").read_text() == "recovered"
+        assert (tmp_path / "res3.txt").read_text(encoding="utf-8") == "recovered"
 
 
 # ============================================================================
@@ -105,7 +105,7 @@ class TestPersistentMemory:
         assert score_later < score_fresh
 
     def test_cross_session_deictic_resolution(self, tmp_path):
-        (tmp_path / "plan.md").write_text("# Project Plan")
+        (tmp_path / "plan.md").write_text("# Project Plan", encoding="utf-8")
         
         # Session 1: 交互
         s1 = TextSession(workdir=str(tmp_path))
@@ -117,7 +117,7 @@ class TestPersistentMemory:
         s2 = TextSession(workdir=str(tmp_path))
         r2 = s2.run("把 刚才那个文件 复制到 backup.md")
         assert r2.status is ExecutionStatus.SUCCESS
-        assert (tmp_path / "backup.md").read_text() == "# Project Plan"
+        assert (tmp_path / "backup.md").read_text(encoding="utf-8") == "# Project Plan"
 
 
 # ============================================================================
@@ -130,7 +130,7 @@ class TestProductivitySuite:
 
     def test_csv_aggregation(self, prod, tmp_path):
         csv_file = tmp_path / "data.csv"
-        csv_file.write_text("item,cost\nA,10\nB,25.5\nC,14.5\n")
+        csv_file.write_text("item,cost\nA,10\nB,25.5\nC,14.5\n", encoding="utf-8")
         cmd = ToolCommand(
             tool_name="productivity",
             action="table_aggregate",
@@ -142,7 +142,7 @@ class TestProductivitySuite:
 
     def test_csv_mean_and_count(self, prod, tmp_path):
         csv_file = tmp_path / "data2.csv"
-        csv_file.write_text("score\n80\n90\n100\n")
+        csv_file.write_text("score\n80\n90\n100\n", encoding="utf-8")
         res = prod.execute(ToolCommand(
             tool_name="productivity", action="table_aggregate",
             args={"path": "data2.csv", "column": "score", "operation": "mean"}

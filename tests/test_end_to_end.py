@@ -38,24 +38,24 @@ def session(tmp_path) -> TextSession:
 # ============================================================================
 class TestBasicFlow:
     def test_read_file_e2e(self, session, tmp_path):
-        (tmp_path / "notes.txt").write_text("会议记录：周三复盘")
+        (tmp_path / "notes.txt").write_text("会议记录：周三复盘", encoding="utf-8")
         turn = session.run("读取 notes.txt")
         assert turn.status is ExecutionStatus.SUCCESS
         assert "会议记录" in turn.feedback.text
 
     def test_write_then_verify_e2e(self, session, tmp_path):
         assert session.run("把 hello 写入 out.txt").status is ExecutionStatus.SUCCESS
-        assert (tmp_path / "out.txt").read_text() == "hello"
+        assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "hello"
 
     def test_list_directory_e2e(self, session, tmp_path):
-        (tmp_path / "a.txt").write_text("x")
+        (tmp_path / "a.txt").write_text("x", encoding="utf-8")
         (tmp_path / "sub").mkdir()
         turn = session.run("列出目录 .")
         assert turn.status is ExecutionStatus.SUCCESS
         assert "2 个条目" in turn.feedback.text
 
     def test_search_in_file_e2e(self, session, tmp_path):
-        (tmp_path / "code.py").write_text("def foo():\n    pass\n\ndef bar():\n    pass\n")
+        (tmp_path / "code.py").write_text("def foo():\n    pass\n\ndef bar():\n    pass\n", encoding="utf-8")
         turn = session.run("在 code.py 里查找 bar")
         assert turn.status is ExecutionStatus.SUCCESS
         assert "第 4 行" in turn.feedback.text
@@ -72,7 +72,7 @@ class TestBasicFlow:
 
     def test_latency_budget(self, session, tmp_path):
         """交互延迟必须远低于人感知的流畅阈值（约 300ms）。"""
-        (tmp_path / "a.txt").write_text("x")
+        (tmp_path / "a.txt").write_text("x", encoding="utf-8")
         latencies = [session.run("读取 a.txt").latency_ms for _ in range(5)]
         assert max(latencies) < 300, f"最大延迟 {max(latencies):.0f}ms 超出流畅阈值"
 
@@ -82,14 +82,14 @@ class TestBasicFlow:
 # ============================================================================
 class TestConfirmationFlow:
     def test_delete_requires_confirmation(self, session, tmp_path):
-        (tmp_path / "tmp.txt").write_text("x")
+        (tmp_path / "tmp.txt").write_text("x", encoding="utf-8")
         turn = session.run("删除文件 tmp.txt")
         assert turn.status is ExecutionStatus.PENDING_CONFIRMATION
         assert (tmp_path / "tmp.txt").exists()      # 关键：没真删
 
     def test_nod_approves(self, session, tmp_path):
         target = tmp_path / "tmp.txt"
-        target.write_text("x")
+        target.write_text("x", encoding="utf-8")
         session.run("删除文件 tmp.txt")
         turn = session.nod()
         assert turn.status is ExecutionStatus.SUCCESS
@@ -97,7 +97,7 @@ class TestConfirmationFlow:
 
     def test_pinch_approves(self, session, tmp_path):
         target = tmp_path / "tmp.txt"
-        target.write_text("x")
+        target.write_text("x", encoding="utf-8")
         session.run("删除文件 tmp.txt")
         turn = session.pinch()
         assert turn.status is ExecutionStatus.SUCCESS
@@ -105,7 +105,7 @@ class TestConfirmationFlow:
 
     def test_verbal_yes_approves(self, session, tmp_path):
         target = tmp_path / "tmp.txt"
-        target.write_text("x")
+        target.write_text("x", encoding="utf-8")
         session.run("删除文件 tmp.txt")
         turn = session.say("确认")
         assert turn.status is ExecutionStatus.SUCCESS
@@ -113,7 +113,7 @@ class TestConfirmationFlow:
 
     def test_shake_denies(self, session, tmp_path):
         target = tmp_path / "tmp.txt"
-        target.write_text("x")
+        target.write_text("x", encoding="utf-8")
         session.run("删除文件 tmp.txt")
         turn = session.shake()
         assert turn.status is ExecutionStatus.CANCELLED
@@ -121,15 +121,15 @@ class TestConfirmationFlow:
 
     def test_stop_gesture_cancels_pending(self, session, tmp_path):
         target = tmp_path / "tmp.txt"
-        target.write_text("x")
+        target.write_text("x", encoding="utf-8")
         session.run("删除文件 tmp.txt")
         turn = session.stop()
         assert turn.status is ExecutionStatus.CANCELLED
         assert target.exists()
 
     def test_confirmation_is_single_use(self, session, tmp_path):
-        (tmp_path / "a.txt").write_text("x")
-        (tmp_path / "b.txt").write_text("y")
+        (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+        (tmp_path / "b.txt").write_text("y", encoding="utf-8")
         session.run("删除文件 a.txt")
         session.nod()
         session.say("确认")           # 再确认一次不应删掉别的文件
@@ -142,28 +142,28 @@ class TestConfirmationFlow:
 class TestUndoFlow:
     def test_undo_write_restores_original(self, session, tmp_path):
         target = tmp_path / "a.txt"
-        target.write_text("原始内容")
+        target.write_text("原始内容", encoding="utf-8")
         session.run("把 覆盖内容 写入 a.txt")
-        assert target.read_text() == "覆盖内容"
+        assert target.read_text(encoding="utf-8") == "覆盖内容"
         session.undo()
-        assert target.read_text() == "原始内容"
+        assert target.read_text(encoding="utf-8") == "原始内容"
 
     def test_undo_spoken(self, session, tmp_path):
-        (tmp_path / "a.txt").write_text("原始")
+        (tmp_path / "a.txt").write_text("原始", encoding="utf-8")
         session.run("把 新内容 写入 a.txt")
         session.say("撤销")
-        assert (tmp_path / "a.txt").read_text() == "原始"
+        assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "原始"
 
     def test_undo_skips_reads(self, session, tmp_path):
-        (tmp_path / "a.txt").write_text("原始")
+        (tmp_path / "a.txt").write_text("原始", encoding="utf-8")
         session.run("把 新内容 写入 a.txt")
         session.run("读取 a.txt")           # 只读不该被撤销
         session.undo()
-        assert (tmp_path / "a.txt").read_text() == "原始"
+        assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "原始"
 
     def test_delete_is_not_undoable_and_says_so(self, session, tmp_path):
         """删除之后没有可撤销项，且必须明说不可撤销，而不是假装成功。"""
-        (tmp_path / "a.txt").write_text("x")
+        (tmp_path / "a.txt").write_text("x", encoding="utf-8")
         session.run("删除文件 a.txt")
         session.nod()
         outcome = session.undo()
@@ -172,14 +172,14 @@ class TestUndoFlow:
 
     def test_undo_targets_latest_change_not_delete(self, session, tmp_path):
         """有一次可撤销的写入时，撤销应作用于它而不是更早的删除。"""
-        (tmp_path / "a.txt").write_text("x")
+        (tmp_path / "a.txt").write_text("x", encoding="utf-8")
         session.run("删除文件 a.txt")
         session.nod()
-        (tmp_path / "b.txt").write_text("原始")
+        (tmp_path / "b.txt").write_text("原始", encoding="utf-8")
         session.run("把 新 写入 b.txt")
         outcome = session.undo()
         assert outcome["ok"] is True
-        assert (tmp_path / "b.txt").read_text() == "原始"
+        assert (tmp_path / "b.txt").read_text(encoding="utf-8") == "原始"
 
 
 # ============================================================================
@@ -272,13 +272,13 @@ class TestErrorHandling:
 # ============================================================================
 class TestObservability:
     def test_stage_timings_present(self, session, tmp_path):
-        (tmp_path / "a.txt").write_text("x")
+        (tmp_path / "a.txt").write_text("x", encoding="utf-8")
         turn = session.run("读取 a.txt")
         for stage in ("perceive", "fuse", "interpret", "route", "execute"):
             assert stage in turn.stage_timings
 
     def test_events_emitted_in_order(self, session, tmp_path):
-        (tmp_path / "a.txt").write_text("x")
+        (tmp_path / "a.txt").write_text("x", encoding="utf-8")
         seen = []
         for event_type in ("turn.start", "turn.fused", "turn.intent", "turn.executing", "turn.result", "turn.end"):
             session.orchestrator.bus.subscribe(event_type, lambda e: seen.append(e.name))
@@ -296,7 +296,7 @@ class TestObservability:
         assert "run_command" in caps["terminal"]
 
     def test_turn_summary_is_readable(self, session, tmp_path):
-        (tmp_path / "a.txt").write_text("x")
+        (tmp_path / "a.txt").write_text("x", encoding="utf-8")
         summary = session.run("读取 a.txt").summary()
         assert "success" in summary and "ms" in summary
 
@@ -344,13 +344,13 @@ from futurework.types import SafetyLevel as SafetyLevel_SAFE  # noqa: E402  供�
 # ============================================================================
 class TestConversationFlow:
     def test_multi_turn_context(self, session, tmp_path):
-        (tmp_path / "report.md").write_text("# 季度报告")
+        (tmp_path / "report.md").write_text("# 季度报告", encoding="utf-8")
         session.run("读取 report.md")
         turn = session.run("把它复制一份")     # 指代上一轮的目标
         assert turn.feedback.text               # 应有回应（追问或执行），而非崩溃
 
     def test_session_does_not_leak_pending_state(self, session, tmp_path):
-        (tmp_path / "a.txt").write_text("x")
+        (tmp_path / "a.txt").write_text("x", encoding="utf-8")
         session.run("删除文件 a.txt")
         assert session.orchestrator.dialogue.state is DialogueState.AWAITING_CONFIRMATION
         session.shake()
