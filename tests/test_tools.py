@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -198,9 +199,24 @@ class TestTerminal:
             ExecutionStatus.SUCCESS, ExecutionStatus.FAILED)
 
     def test_run_tests_unknown_runner(self, tmp_path):
+        """显式传入未知 runner：不依赖环境中是否装了 pytest，确定性走失败分支。"""
+        term = TerminalAdapter(str(tmp_path))
+        result = term.execute(ToolCommand(
+            tool_name="terminal", action="run_tests",
+            args={"runner": "definitely_not_a_runner"},
+        ))
+        assert "未能识别测试运行器" in (result.error or "")
+
+    def test_run_tests_empty_dir_with_global_pytest(self, tmp_path):
+        """回归：全局装有 pytest 时，空目录会命中 pytest 并以退出码 5（未收集到测试）失败——
+        如实报告失败是正确行为，不该误报"未识别运行器"。"""
         term = TerminalAdapter(str(tmp_path))
         result = term.execute(ToolCommand(tool_name="terminal", action="run_tests", args={}))
-        assert "未能识别测试运行器" in (result.error or "")
+        if shutil.which("pytest"):
+            assert result.status is ExecutionStatus.FAILED
+            assert result.data["returncode"] == 5
+        else:
+            assert "未能识别测试运行器" in (result.error or "")
 
     def test_history_recorded(self, term):
         term.execute(ToolCommand(tool_name="terminal", action="run_command", args={"command": "echo x"}))

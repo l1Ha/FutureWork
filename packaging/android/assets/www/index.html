@@ -396,6 +396,7 @@
       <button class="btn" id="btnShake" title="模拟摇头拒绝">🙅 摇头 (Shake)</button>
       <button class="btn" id="btnPinch" title="模拟捏合操作">👌 捏合 (Pinch)</button>
       <button class="btn" id="btnUndo" title="撤回上一次修改">↩️ 撤销 (Undo)</button>
+      <button class="btn" id="btnVoice" title="语音输入（说一句即自动发送）" style="min-width:96px">🎤 语音输入</button>
       <input type="text" class="text-input" id="cmdInput" placeholder="输入自然语言指令（例如：把 sales.csv 的 revenue 列求和，或者读取刚才那个文件）..." autocomplete="off">
       <button class="btn btn-primary" id="btnSend">发送指令</button>
     </div>
@@ -777,6 +778,86 @@
     document.getElementById('btnShake').onclick = () => sendTurn('', { shake: true });
     document.getElementById('btnPinch').onclick = () => sendTurn('', { pinch: true });
     document.getElementById('btnUndo').onclick = () => sendTurn('撤销');
+
+    // ==========================================
+    // 语音输入 (Web Speech API / Android 原生桥接)
+    // ==========================================
+    const btnVoice = document.getElementById('btnVoice');
+    let recognition = null;
+    let voiceListening = false;
+
+    function setVoiceButtonState(listening) {
+      voiceListening = listening;
+      btnVoice.innerText = listening ? '🔴 停止聆听' : '🎤 语音输入';
+      btnVoice.style.background = listening ? 'rgba(239,68,68,0.25)' : 'rgba(255,255,255,0.08)';
+      btnVoice.style.borderColor = listening ? 'var(--red)' : 'var(--border)';
+    }
+
+    function initWebSpeechRecognition() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) return null;
+      const rec = new SR();
+      rec.lang = 'zh-CN';
+      rec.continuous = false;
+      rec.interimResults = true;
+      rec.maxAlternatives = 1;
+
+      rec.onresult = (event) => {
+        let finalText = '';
+        let interimText = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const t = event.results[i][0].transcript;
+          if (event.results[i].isFinal) finalText += t;
+          else interimText += t;
+        }
+        // 中间结果实时回显到输入框，让用户看到"正在听"
+        input.value = finalText || interimText;
+        if (finalText.trim()) {
+          // 终稿到达：自动发送，完成"说话即指挥"闭环
+          input.value = finalText.trim();
+          document.getElementById('btnSend').click();
+        }
+      };
+      rec.onerror = (event) => {
+        setVoiceButtonState(false);
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          alert('麦克风权限被拒绝。请在浏览器地址栏左侧允许麦克风访问后重试。');
+        } else if (event.error === 'no-speech') {
+          // 静默：没说话就停了，不打扰用户
+        } else if (event.error !== 'aborted') {
+          alert('语音识别出错: ' + event.error);
+        }
+      };
+      rec.onend = () => setVoiceButtonState(false);
+      return rec;
+    }
+
+    btnVoice.onclick = () => {
+      // Android WebView 环境优先走原生语音识别桥（体验更稳、支持离线包）
+      if (window.AndroidBridge && typeof window.AndroidBridge.startVoiceInput === 'function') {
+        window.AndroidBridge.startVoiceInput();
+        return;
+      }
+      if (voiceListening) {
+        if (recognition) recognition.stop();
+        setVoiceButtonState(false);
+        return;
+      }
+      recognition = initWebSpeechRecognition();
+      if (!recognition) {
+        alert('当前浏览器不支持 Web Speech API 语音识别。推荐使用 Chrome / Edge，或在 Android App 中使用原生语音识别。');
+        return;
+      }
+      try {
+        recognition.start();
+        setVoiceButtonState(true);
+        input.placeholder = '正在聆听…请说出您的指令（例如：列出目录）';
+        setTimeout(() => { input.placeholder = '输入自然语言指令（例如：把 sales.csv 的 revenue 列求和，或者读取刚才那个文件）...'; }, 8000);
+      } catch (err) {
+        setVoiceButtonState(false);
+        alert('无法启动语音识别: ' + err.message);
+      }
+    };
 
     document.querySelectorAll('.quick-tag').forEach(tag => {
       tag.onclick = () => {
