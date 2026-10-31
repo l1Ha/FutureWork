@@ -297,9 +297,13 @@ class TestCameraVisionTracking:
 
         注意：合成图形对 YuNet DNN 不是人脸——DNN 按设计拒绝它，
         这正是它对真实照片召回率远高于 Haar 的原因，不能作为 DNN 的判据。
+        OpenCV 5.x 新构建已移除 CascadeClassifier——此类构建跳过本测试，
+        由 YuNet 主引擎测试覆盖。
         """
         pytest.importorskip("cv2")
         import cv2
+        if not hasattr(cv2, "CascadeClassifier"):
+            pytest.skip("此 OpenCV 构建不含 Haar CascadeClassifier")
         from futurework.sensory.camera_tracker import RealCameraTracker
 
         tracker = RealCameraTracker(model_path="/nonexistent/yunet.onnx")

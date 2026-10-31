@@ -139,17 +139,25 @@ class RealCameraTracker:
                 self._yunet = None
 
         # ---- 回退引擎：OpenCV Haar 特征级联分类器族 ----
-        if self._cv_ready:
-            cascade_path = cascade_dir or cv2.data.haarcascades
-            self.face_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_default.xml"))
-            self.face_cascade_alt2 = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_alt2.xml"))
-            self.face_cascade_alt = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_alt.xml"))
-            self.face_cascade_profile = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_profileface.xml"))
-            self.eye_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_eye.xml"))
-            self.smile_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_smile.xml"))
+        # Haar 在 OpenCV 5.x 新构建中已被移除（无 CascadeClassifier）。
+        # 引擎设计必须版本健壮：Haar 缺失时 YuNet 仍可独立工作，
+        # 初始化绝不能因单个引擎不可用而崩溃——否则 Web 服务都无法启动。
+        self._haar_ready = False
+        if self._cv_ready and hasattr(cv2, "CascadeClassifier"):
+            try:
+                cascade_path = cascade_dir or cv2.data.haarcascades
+                self.face_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_default.xml"))
+                self.face_cascade_alt2 = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_alt2.xml"))
+                self.face_cascade_alt = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_alt.xml"))
+                self.face_cascade_profile = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_profileface.xml"))
+                self.eye_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_eye.xml"))
+                self.smile_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_smile.xml"))
 
-            # 自适应对比度增强器 (CLAHE)，解决逆光、暗光与强光人脸失配
-            self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                # 自适应对比度增强器 (CLAHE)，解决逆光、暗光与强光人脸失配
+                self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                self._haar_ready = True
+            except Exception:
+                self._haar_ready = False
 
         # 内部认知感知分析器
         self.facial_analyzer = FacialExpressionAnalyzer()
@@ -180,7 +188,11 @@ class RealCameraTracker:
     def engine_name(self) -> str:
         if not self._cv_ready:
             return "unavailable (需安装 opencv-python-headless)"
-        return "yunet-dnn" if self._yunet is not None else "haar-cascade-fallback"
+        if self._yunet is not None:
+            return "yunet-dnn"
+        if self._haar_ready:
+            return "haar-cascade-fallback"
+        return "unavailable (此 OpenCV 构建既无 FaceDetectorYN 也无 CascadeClassifier)"
 
     # ------------------------------------------------------------------
     # 硬件可用性检查
@@ -267,15 +279,18 @@ class RealCameraTracker:
                 confidence=0.9,
             )
 
-            # 1.2 眼睛检测与注视点追踪
-            eyes = self.eye_cascade.detectMultiScale(
-                face_roi_gray,
-                scaleFactor=1.1,
-                minNeighbors=3,
-                minSize=(int(fw * 0.1), int(fh * 0.1)),
-            )
+            # 1.2 眼睛检测与注视点追踪（Haar 引擎缺失时按无眨眼处理，
+            # 视线退化为头位锚点——YuNet-only 构建下依然可用）
+            eye_detected = False
+            if self._haar_ready:
+                eyes = self.eye_cascade.detectMultiScale(
+                    face_roi_gray,
+                    scaleFactor=1.1,
+                    minNeighbors=3,
+                    minSize=(int(fw * 0.1), int(fh * 0.1)),
+                )
+                eye_detected = len(eyes) >= 1
             # 视线 screen_x, screen_y 估算
-            eye_detected = len(eyes) >= 1
             if eye_detected:
                 # 依据人脸在画面的归一化坐标作为注视锚点
                 # 镜像翻转：当用户往自身右侧（画面左侧）看时，视线指向屏幕右侧
@@ -291,12 +306,14 @@ class RealCameraTracker:
                 )
 
             # 1.3 微表情与笑脸 / 困惑分析
-            smiles = self.smile_cascade.detectMultiScale(
-                face_roi_gray,
-                scaleFactor=1.2,
-                minNeighbors=8,
-                minSize=(int(fw * 0.15), int(fh * 0.1)),
-            )
+            smiles = []
+            if self._haar_ready:
+                smiles = self.smile_cascade.detectMultiScale(
+                    face_roi_gray,
+                    scaleFactor=1.2,
+                    minNeighbors=8,
+                    minSize=(int(fw * 0.15), int(fh * 0.1)),
+                )
             au_map: Dict[str, float] = {}
             if len(smiles) > 0:
                 au_map["AU12"] = 0.85  # 嘴角上扬
@@ -408,6 +425,8 @@ class RealCameraTracker:
                 self._yunet = None
 
         # ---------- 回退引擎：Haar 级联族（CLAHE 均衡 + 多模型回退） ----------
+        if not self._haar_ready:
+            return None
         gray_eq = self._clahe.apply(gray)
         min_dim = max(24, int(min(w, h) * 0.08))
         min_face_size = (min_dim, min_dim)
