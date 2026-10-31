@@ -139,6 +139,8 @@ class TerminalAdapter(ToolAdapter):
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                # Windows 上默认按 cp1252 解码，中文/UTF-8 输出会乱码
+                encoding="utf-8",
                 errors="replace",
             )
         except subprocess.TimeoutExpired:

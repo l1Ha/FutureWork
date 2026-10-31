@@ -90,6 +90,7 @@ class McpAdapter(ToolAdapter):
                 stderr=subprocess.PIPE,
                 env=self.env,
                 text=True,
+                encoding="utf-8",
                 bufsize=1,
             )
         except Exception as exc:

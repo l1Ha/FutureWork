@@ -118,7 +118,9 @@ class SystemAdapter(ToolAdapter):
     @staticmethod
     def _run(cmd: List[str], timeout: float = 5.0) -> Tuple[int, str, str]:
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            # Windows/macOS 上默认 locale 解码会让 UTF-8 输出乱码，显式指定
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                                  encoding="utf-8", errors="replace")
             return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
         except FileNotFoundError:
             return 127, "", f"命令不存在：{cmd[0]}（请先安装对应工具）"

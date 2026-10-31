@@ -76,7 +76,9 @@ class VcsAdapter(ToolAdapter):
         try:
             proc = subprocess.run(
                 ["git", *cmd], cwd=self.repo_path, capture_output=True,
-                text=True, timeout=timeout, errors="replace",
+                # git 输出恒为 UTF-8；Windows 上 text=True 默认按 cp1252 解码，
+                # 中文提交信息会变成乱码——必须显式指定
+                text=True, timeout=timeout, encoding="utf-8", errors="replace",
             )
             return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
         except FileNotFoundError:
