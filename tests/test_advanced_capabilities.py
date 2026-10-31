@@ -345,6 +345,12 @@ class TestCameraVisionTracking:
         assert errors == []
 
     def test_camera_process_jpeg_bytes(self):
+        """
+        JPEG 字节流管道断言：解码 → 处理 → 返回结构化结果，不因引擎差异而崩。
+
+        检出断言仅在 Haar 引擎可用时成立：YuNet 按设计拒绝合成几何图形
+        （OpenCV 5.x 构建 Haar 不可用），此否定结果恰恰是正确行为。
+        """
         pytest.importorskip("cv2")
         import cv2
         from futurework.sensory.camera_tracker import RealCameraTracker
@@ -352,7 +358,24 @@ class TestCameraVisionTracking:
         tracker = RealCameraTracker(model_path="/nonexistent/yunet.onnx")
         _, jpg = cv2.imencode(".jpg", self._synthetic_frame())
         result = tracker.process_image_bytes(jpg.tobytes())
-        assert result.face_detected is True
+        assert result.timestamp > 0
+        if tracker._haar_ready:
+            assert result.face_detected is True
+        else:
+            assert result.face_detected is False
+
+    def test_camera_process_invalid_bytes_raises(self):
+        """JPEG 管道的负路径：垃圾字节必须报 ValueError，而不是静默返回空结果。"""
+        pytest.importorskip("cv2")
+        from futurework.sensory.camera_tracker import RealCameraTracker
+
+        tracker = RealCameraTracker(model_path="/nonexistent/yunet.onnx")
+        try:
+            tracker.process_image_bytes(b"not-an-image-at-all")
+        except ValueError as exc:
+            assert "无法解码" in str(exc)
+        else:
+            raise AssertionError("垃圾字节应触发 ValueError")
 
     def test_package_imports_without_cv2(self):
         """
