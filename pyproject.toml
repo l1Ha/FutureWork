@@ -27,6 +27,9 @@ dependencies = ["pydantic>=2.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-randomly>=3.0"]
+# 视觉功能（真实摄像头人脸/手势/视线追踪）为可选依赖：
+# 核心包保持零强制依赖，未安装时功能优雅降级并给出安装指引
+vision = ["numpy", "opencv-python-headless>=4.8"]
 
 [project.urls]
 Homepage = "https://github.com/l1Ha/FutureWork"

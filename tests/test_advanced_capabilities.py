@@ -285,6 +285,7 @@ class TestCameraVisionTracking:
 
     def test_yunet_engine_loaded_by_default(self):
         """回归：真实画面召回率低的根因是 Haar——主引擎必须是 YuNet DNN。"""
+        pytest.importorskip("cv2")
         from futurework.sensory.camera_tracker import RealCameraTracker
 
         tracker = RealCameraTracker()
@@ -297,6 +298,7 @@ class TestCameraVisionTracking:
         注意：合成图形对 YuNet DNN 不是人脸——DNN 按设计拒绝它，
         这正是它对真实照片召回率远高于 Haar 的原因，不能作为 DNN 的判据。
         """
+        pytest.importorskip("cv2")
         import cv2
         from futurework.sensory.camera_tracker import RealCameraTracker
 
@@ -316,6 +318,7 @@ class TestCameraVisionTracking:
 
     def test_processing_is_thread_safe(self):
         """HTTP 服务端每请求一线程，视觉状态必须串行化。"""
+        pytest.importorskip("cv2")
         import threading
         from futurework.sensory.camera_tracker import RealCameraTracker
 
@@ -338,6 +341,7 @@ class TestCameraVisionTracking:
         assert errors == []
 
     def test_camera_process_jpeg_bytes(self):
+        pytest.importorskip("cv2")
         import cv2
         from futurework.sensory.camera_tracker import RealCameraTracker
 
@@ -345,4 +349,42 @@ class TestCameraVisionTracking:
         _, jpg = cv2.imencode(".jpg", self._synthetic_frame())
         result = tracker.process_image_bytes(jpg.tobytes())
         assert result.face_detected is True
+
+    def test_package_imports_without_cv2(self):
+        """
+        回归：CI 全部 job 失败的根因——camera_tracker 曾在模块层硬性 import cv2，
+        导致未装 OpenCV 的环境下连 cognition 层都无法导入。
+        用 sys.modules 注入 None 模拟"无 cv2"环境，验证核心包仍可完整导入，
+        且视觉功能给出带安装指引的明确错误。
+        """
+        import subprocess
+        import sys
+
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        code = "\n".join([
+            "import sys",
+            "sys.modules['cv2'] = None",
+            "import futurework",
+            "from futurework.sensory.camera_tracker import CV_AVAILABLE, RealCameraTracker",
+            "assert CV_AVAILABLE is False, 'CV_AVAILABLE 应为 False'",
+            "t = RealCameraTracker()",
+            "assert 'unavailable' in t.engine_name, t.engine_name",
+            "try:",
+            "    t.process_frame(object())",
+            "except RuntimeError as e:",
+            "    assert 'opencv' in str(e).lower(), e",
+            "else:",
+            "    raise AssertionError('无 cv2 时应拒绝处理帧')",
+            "print('no-cv2 import OK')",
+        ])
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            cwd=project_root,
+            env={**os.environ, "PYTHONPATH": project_root},
+            timeout=60,
+        )
+        assert result.returncode == 0, f"无 cv2 环境导入失败：{result.stderr[-500:]}"
+        assert "no-cv2 import OK" in result.stdout
 

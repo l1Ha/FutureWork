@@ -19,8 +19,20 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import cv2
-import numpy as np
+# cv2/numpy 是视觉功能的可选依赖（pip install opencv-python-headless）。
+# 核心包哲学是零强制依赖：CI、无头服务器与未装 OpenCV 的环境下，
+# 本模块必须仍可导入，让 Web 服务与会话照常启动，仅在真正调用视觉功能时
+# 才提示安装。若在此处硬性 import cv2，整个包（连 cognition 层）都会被拖垮
+# ——这正是曾经导致 CI 全部 job 失败的根因。
+try:
+    import cv2
+    import numpy as np
+
+    CV_AVAILABLE = True
+except ImportError:  # pragma: no cover - 环境无 OpenCV 时
+    cv2 = None
+    np = None
+    CV_AVAILABLE = False
 
 from futurework.sensory.facial import FacialExpressionAnalyzer, HeadPoseAnalyzer
 from futurework.sensory.gaze import GazeTracker
@@ -33,6 +45,14 @@ from futurework.types import (
     HandGestureSignal,
     HeadPoseSignal,
 )
+
+
+def _require_cv2() -> None:
+    """视觉功能调用前的统一守卫：给出可执行的安装指引而非裸 ImportError。"""
+    if not CV_AVAILABLE:
+        raise RuntimeError(
+            "视觉功能需要 OpenCV 支持，请先安装：pip install opencv-python-headless"
+        )
 
 
 @dataclass
@@ -97,6 +117,7 @@ class RealCameraTracker:
         self.device_index = device_index
         self.frame_width = frame_width
         self.frame_height = frame_height
+        self._cv_ready = CV_AVAILABLE
 
         # ---- 主引擎：YuNet DNN 人脸检测器（随包内置，无需联网下载） ----
         self._yunet: Optional[Any] = None
@@ -104,7 +125,7 @@ class RealCameraTracker:
         bundled_model = model_path or os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "models", "face_detection_yunet_2023mar.onnx"
         )
-        if os.path.isfile(bundled_model):
+        if self._cv_ready and os.path.isfile(bundled_model):
             try:
                 self._yunet = cv2.FaceDetectorYN.create(
                     bundled_model,
@@ -118,16 +139,17 @@ class RealCameraTracker:
                 self._yunet = None
 
         # ---- 回退引擎：OpenCV Haar 特征级联分类器族 ----
-        cascade_path = cascade_dir or cv2.data.haarcascades
-        self.face_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_default.xml"))
-        self.face_cascade_alt2 = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_alt2.xml"))
-        self.face_cascade_alt = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_alt.xml"))
-        self.face_cascade_profile = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_profileface.xml"))
-        self.eye_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_eye.xml"))
-        self.smile_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_smile.xml"))
+        if self._cv_ready:
+            cascade_path = cascade_dir or cv2.data.haarcascades
+            self.face_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_default.xml"))
+            self.face_cascade_alt2 = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_alt2.xml"))
+            self.face_cascade_alt = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_frontalface_alt.xml"))
+            self.face_cascade_profile = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_profileface.xml"))
+            self.eye_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_eye.xml"))
+            self.smile_cascade = cv2.CascadeClassifier(os.path.join(cascade_path, "haarcascade_smile.xml"))
 
-        # 自适应对比度增强器 (CLAHE)，解决逆光、暗光与强光人脸失配
-        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            # 自适应对比度增强器 (CLAHE)，解决逆光、暗光与强光人脸失配
+            self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
         # 内部认知感知分析器
         self.facial_analyzer = FacialExpressionAnalyzer()
@@ -144,7 +166,7 @@ class RealCameraTracker:
         self._vision_lock = threading.RLock()
 
         # 后台线程采集控制
-        self._cap: Optional[cv2.VideoCapture] = None
+        self._cap: Optional[Any] = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -156,6 +178,8 @@ class RealCameraTracker:
     # ------------------------------------------------------------------
     @property
     def engine_name(self) -> str:
+        if not self._cv_ready:
+            return "unavailable (需安装 opencv-python-headless)"
         return "yunet-dnn" if self._yunet is not None else "haar-cascade-fallback"
 
     # ------------------------------------------------------------------
@@ -164,6 +188,8 @@ class RealCameraTracker:
     @staticmethod
     def is_available(device_index: int = 0) -> Tuple[bool, str]:
         """探测系统是否存在可打开的物理摄像头。"""
+        if not CV_AVAILABLE:
+            return False, "未安装 OpenCV，视觉功能不可用（安装：pip install opencv-python-headless）"
         try:
             cap = cv2.VideoCapture(device_index)
             if not cap.isOpened():
@@ -182,7 +208,7 @@ class RealCameraTracker:
     # ------------------------------------------------------------------
     def process_frame(
         self,
-        frame: np.ndarray,
+        frame: Any,
         timestamp: Optional[float] = None,
         *,
         annotate: bool = True,
@@ -193,12 +219,13 @@ class RealCameraTracker:
         全程持有 ``_vision_lock``：表情/头动/视线分析器都携带跨帧状态，
         而 HTTP 服务端是每请求一线程，不串行化会产生竞态。
         """
+        _require_cv2()
         with self._vision_lock:
             return self._process_frame_locked(frame, timestamp, annotate=annotate)
 
     def _process_frame_locked(
         self,
-        frame: np.ndarray,
+        frame: Any,
         timestamp: Optional[float],
         *,
         annotate: bool,
@@ -407,6 +434,7 @@ class RealCameraTracker:
     # ------------------------------------------------------------------
     def process_image_bytes(self, image_bytes: bytes, timestamp: Optional[float] = None) -> CameraPerceptionResult:
         """从 JPEG/PNG/WebP 字节数组解码并处理。"""
+        _require_cv2()
         nparr = np.frombuffer(image_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if frame is None:
@@ -551,6 +579,7 @@ class RealCameraTracker:
     # ------------------------------------------------------------------
     def start(self, callback: Optional[Callable[[CameraPerceptionResult], None]] = None) -> bool:
         """启动后台摄像头实时捕获分析线程。"""
+        _require_cv2()
         if self._running:
             return True
         if callback:
