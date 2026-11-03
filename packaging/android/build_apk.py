@@ -158,8 +158,11 @@ def build_apk(project_dir: Path, output_apk: Path) -> None:
 
 if __name__ == "__main__":
     proj = Path(__file__).resolve().parent
-    # 版本号从包内单一来源获取，避免与 __init__.py 漂移
-    sys.path.insert(0, str(proj.parent.parent))
-    from futurework import __version__
-    out = proj.parent.parent / "dist" / f"FutureWork-{__version__}-android.apk"
+    # 版本号从 __init__.py 正则解析：APK 构建环境只有纯 Python（无 pydantic），
+    # 不能 import futurework——否则会连带拖入运行时依赖
+    import re
+    init_src = (proj.parent.parent / "futurework" / "__init__.py").read_text(encoding="utf-8")
+    m = re.search(r'__version__\s*=\s*"([^"]+)"', init_src)
+    version = m.group(1) if m else "0.0.0"
+    out = proj.parent.parent / "dist" / f"FutureWork-{version}-android.apk"
     build_apk(proj, out)

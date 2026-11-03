@@ -10,11 +10,13 @@ import shutil
 import zipfile
 from pathlib import Path
 
-import sys
+import re
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(ROOT))
-from futurework import __version__  # noqa: E402  版本号单一来源
+# 版本号从 __init__.py 正则解析：打包脚本保持零运行时依赖
+_init_src = (ROOT / "futurework" / "__init__.py").read_text(encoding="utf-8")
+_m = re.search(r'__version__\s*=\s*"([^"]+)"', _init_src)
+__version__ = _m.group(1) if _m else "0.0.0"
 
 DIST = ROOT / "dist"
 WINDOWS_DIR = ROOT / "packaging" / "windows"
