@@ -12,6 +12,9 @@ a = Analysis(
     binaries=[],
     datas=[
         (os.path.join(project_root, 'futurework', 'web', 'static'), 'futurework/web/static'),
+        # YuNet 人脸检测模型随包内置，视觉功能离线可用
+        (os.path.join(project_root, 'futurework', 'sensory', 'models', 'face_detection_yunet_2023mar.onnx'),
+         'futurework/sensory/models'),
     ],
     hiddenimports=[
         'futurework',

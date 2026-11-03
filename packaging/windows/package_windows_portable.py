@@ -10,14 +10,19 @@ import shutil
 import zipfile
 from pathlib import Path
 
+import sys
+
 ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(ROOT))
+from futurework import __version__  # noqa: E402  版本号单一来源
+
 DIST = ROOT / "dist"
 WINDOWS_DIR = ROOT / "packaging" / "windows"
 
 
 def create_windows_bundle() -> Path:
     DIST.mkdir(parents=True, exist_ok=True)
-    bundle_name = "FutureWork-0.1.0-windows-x64"
+    bundle_name = f"FutureWork-{__version__}-windows-x64"
     staging_dir = DIST / bundle_name
 
     if staging_dir.exists():
@@ -40,7 +45,7 @@ def create_windows_bundle() -> Path:
     # 4. 生成 Windows 快速使用指引
     with open(staging_dir / "说明_WINDOWS.txt", "w", encoding="utf-8") as f:
         f.write("""======================================================================
-  FutureWork Windows 便携发行版 (Portable Edition v0.1.0)
+  FutureWork Windows 便携发行版 (Portable Edition)
 ======================================================================
 
 【极速启动方式】

@@ -158,5 +158,8 @@ def build_apk(project_dir: Path, output_apk: Path) -> None:
 
 if __name__ == "__main__":
     proj = Path(__file__).resolve().parent
-    out = proj.parent.parent / "dist" / "FutureWork-0.1.0-android.apk"
+    # 版本号从包内单一来源获取，避免与 __init__.py 漂移
+    sys.path.insert(0, str(proj.parent.parent))
+    from futurework import __version__
+    out = proj.parent.parent / "dist" / f"FutureWork-{__version__}-android.apk"
     build_apk(proj, out)
